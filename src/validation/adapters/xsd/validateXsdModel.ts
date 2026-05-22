@@ -242,7 +242,16 @@ class XsdModelValidator {
         this.addPrimitiveChildIssue(element.name, typeName, value, element.range, path, element);
       }
     } else if (isBuiltinType(typeName)) {
-      this.validateSimpleValue(value.text.trim(), typeName, [], element.name, element.range, value.range, path, element);
+      this.validateSimpleValue(
+        value.text.trim(),
+        typeName,
+        [],
+        element.name,
+        element.range,
+        value.range,
+        path,
+        element,
+      );
       if (value.children.length > 0) {
         this.addPrimitiveChildIssue(element.name, typeName, value, element.range, path, element);
       }
@@ -304,6 +313,32 @@ class XsdModelValidator {
     }
 
     this.activeTypes.add(complexType.name);
+    if (complexType.simpleContent) {
+      this.validateAttributes(complexType, value, path);
+      this.validateSimpleValue(
+        value.text.trim(),
+        complexType.simpleContent.baseType,
+        [],
+        element.name,
+        complexType.simpleContent.range,
+        value.range,
+        path,
+        complexType.simpleContent,
+      );
+      if (value.children.length > 0) {
+        this.addPrimitiveChildIssue(
+          element.name,
+          complexType.simpleContent.baseType,
+          value,
+          complexType.simpleContent.range,
+          path,
+          complexType.simpleContent,
+        );
+      }
+      this.activeTypes.delete(complexType.name);
+      return;
+    }
+
     this.validateAttributes(complexType, value, path);
     if (complexType.group) {
       this.validateParticleGroup(complexType.group, value, path, depth + 1);
@@ -581,6 +616,23 @@ class XsdModelValidator {
         path,
         customType,
         nextSeen,
+      );
+      return;
+    }
+
+    if (!isBuiltinType(normalizedType)) {
+      this.issues.push(
+        makeIssue({
+          code: 'xsd-type-not-found',
+          title: `XSD type not found: ${normalizedType}`,
+          message: `The schema references type ${normalizedType}, but this type is not declared in the XSD.`,
+          path,
+          expected: normalizedType,
+          actual: 'Missing type declaration',
+          schemaRange,
+          ...schemaSource(schemaOwner),
+          messageRange,
+        }),
       );
       return;
     }

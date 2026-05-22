@@ -2,19 +2,20 @@ import { XMLParser } from 'fast-xml-parser';
 import { makeIssue, rangeFromOffset, wholeDocumentRange } from '../../textRanges';
 import type { RelatedSchemaDocument, TextRange, ValidationIssue } from '../../types';
 import type {
-  XsdAttributeDecl,
-  XsdComplexType,
-  XsdElementDecl,
-  XsdExternalReference,
-  XsdMaxOccurs,
-  XsdModelParseResult,
-  XsdParticleGroup,
-  XsdRestriction,
-  XsdRestrictionKind,
-  XsdSchemaModel,
-  XsdSchemaSourceInfo,
-  XsdSimpleType,
-  XsdUnsupportedFeature,
+    XsdAttributeDecl,
+    XsdComplexType,
+    XsdElementDecl,
+    XsdExternalReference,
+    XsdMaxOccurs,
+    XsdModelParseResult,
+    XsdParticleGroup,
+    XsdRestriction,
+    XsdRestrictionKind,
+    XsdSchemaModel,
+    XsdSchemaSourceInfo,
+    XsdSimpleContent,
+    XsdSimpleType,
+    XsdUnsupportedFeature,
 } from './types';
 
 const ATTRIBUTE_KEY = ':@';
@@ -332,7 +333,9 @@ const resolveExternalReference = (
     ? candidates.filter((document) => sourceMatchesLocation(document.source, reference.schemaLocation ?? ''))
     : [];
   const namespaceMatches = reference.namespace
-    ? candidates.filter((document) => (document.source.targetNamespace ?? document.source.namespace) === reference.namespace)
+    ? candidates.filter(
+        (document) => (document.source.targetNamespace ?? document.source.namespace) === reference.namespace,
+      )
     : [];
 
   if (reference.kind === 'include') {
@@ -492,6 +495,7 @@ const parseComplexType = (
 ): XsdComplexType => {
   const attributes: XsdAttributeDecl[] = [];
   let group: XsdParticleGroup | undefined;
+  let simpleContent: XsdSimpleContent | undefined;
 
   if (readAttribute(tag.attributes, 'mixed') === 'true') {
     document.unsupportedFeatures.push({
@@ -514,7 +518,13 @@ const parseComplexType = (
       group = parseParticleGroup(childTag, document, rangeLocator, context);
     } else if (childTag.localName === 'attribute') {
       attributes.push(parseAttribute(childTag, document, rangeLocator, context));
-    } else if (['complexContent', 'simpleContent'].includes(childTag.localName)) {
+    } else if (childTag.localName === 'simpleContent') {
+      const parsedSimpleContent = parseSimpleContentExtension(childTag, name, document, rangeLocator, context);
+      if (parsedSimpleContent) {
+        simpleContent = parsedSimpleContent.simpleContent;
+        attributes.push(...parsedSimpleContent.attributes);
+      }
+    } else if (childTag.localName === 'complexContent') {
       document.unsupportedFeatures.push({
         code: 'xsd-content-derivation',
         title: 'Unsupported XSD type derivation',
@@ -526,7 +536,120 @@ const parseComplexType = (
     }
   }
 
-  return { name, group, attributes, range: tag.range, sourceId: context.sourceId, sourceLabel: context.sourceLabel };
+  return {
+    name,
+    group,
+    simpleContent,
+    attributes,
+    range: tag.range,
+    sourceId: context.sourceId,
+    sourceLabel: context.sourceLabel,
+  };
+};
+
+const parseSimpleContentExtension = (
+  tag: TagNode,
+  typeName: string,
+  document: ParsedXsdDocument,
+  rangeLocator: XsdRangeLocator,
+  context: SourceContext,
+): { simpleContent: XsdSimpleContent; attributes: XsdAttributeDecl[] } | undefined => {
+  let extensionTag: TagNode | undefined;
+
+  for (const child of tag.children) {
+    const childTag = toTagNode(child, rangeLocator);
+    if (!childTag) {
+      continue;
+    }
+
+    if (childTag.localName === 'extension') {
+      extensionTag = childTag;
+    } else if (childTag.localName === 'restriction') {
+      document.unsupportedFeatures.push({
+        code: 'xsd-simple-content-restriction',
+        title: 'XSD simpleContent restriction is unsupported',
+        message: `Complex type ${typeName} uses xs:simpleContent restriction, which is not derived by this validator yet.`,
+        range: childTag.range,
+        sourceId: context.sourceId,
+        sourceLabel: context.sourceLabel,
+      });
+      return undefined;
+    } else if (childTag.localName !== 'annotation') {
+      document.unsupportedFeatures.push({
+        code: 'xsd-simple-content-child',
+        title: `Unsupported simpleContent child: ${childTag.localName}`,
+        message: `Complex type ${typeName} contains xs:${childTag.localName} inside xs:simpleContent, which cannot be expanded by this validator yet.`,
+        range: childTag.range,
+        sourceId: context.sourceId,
+        sourceLabel: context.sourceLabel,
+      });
+    }
+  }
+
+  if (!extensionTag) {
+    document.unsupportedFeatures.push({
+      code: 'xsd-simple-content-extension-missing',
+      title: 'XSD simpleContent extension is missing',
+      message: `Complex type ${typeName} uses xs:simpleContent without a supported xs:extension child.`,
+      range: tag.range,
+      sourceId: context.sourceId,
+      sourceLabel: context.sourceLabel,
+    });
+    return undefined;
+  }
+
+  const baseType = readAttribute(extensionTag.attributes, 'base');
+  if (!baseType) {
+    document.unsupportedFeatures.push({
+      code: 'xsd-simple-content-extension-base-missing',
+      title: 'XSD simpleContent extension base is missing',
+      message: `Complex type ${typeName} uses xs:simpleContent extension without a base type.`,
+      range: extensionTag.range,
+      sourceId: context.sourceId,
+      sourceLabel: context.sourceLabel,
+    });
+    return undefined;
+  }
+
+  const attributes: XsdAttributeDecl[] = [];
+  for (const child of extensionTag.children) {
+    const childTag = toTagNode(child, rangeLocator);
+    if (!childTag) {
+      continue;
+    }
+
+    if (childTag.localName === 'attribute') {
+      attributes.push(parseAttribute(childTag, document, rangeLocator, context));
+    } else if (childTag.localName === 'attributeGroup' || childTag.localName === 'anyAttribute') {
+      document.unsupportedFeatures.push({
+        code: 'xsd-simple-content-attribute-derivation',
+        title: `Unsupported simpleContent attribute feature: ${childTag.localName}`,
+        message: `Complex type ${typeName} uses xs:${childTag.localName} inside xs:simpleContent extension, which is not expanded by this validator yet.`,
+        range: childTag.range,
+        sourceId: context.sourceId,
+        sourceLabel: context.sourceLabel,
+      });
+    } else if (childTag.localName !== 'annotation') {
+      document.unsupportedFeatures.push({
+        code: 'xsd-simple-content-extension-child',
+        title: `Unsupported simpleContent extension child: ${childTag.localName}`,
+        message: `Complex type ${typeName} contains xs:${childTag.localName} inside xs:simpleContent extension, which cannot be expanded by this validator yet.`,
+        range: childTag.range,
+        sourceId: context.sourceId,
+        sourceLabel: context.sourceLabel,
+      });
+    }
+  }
+
+  return {
+    simpleContent: {
+      baseType: normalizeTypeName(baseType),
+      range: extensionTag.range,
+      sourceId: context.sourceId,
+      sourceLabel: context.sourceLabel,
+    },
+    attributes,
+  };
 };
 
 const parseParticleGroup = (
@@ -712,16 +835,6 @@ const findUnsupportedFeatures = (schemaText: string, context: SourceContext): Xs
       message: 'complexContent extension/restriction is not derived by this validator yet.',
     },
     {
-      localName: 'simpleContent',
-      title: 'XSD simpleContent is unsupported',
-      message: 'simpleContent extension/restriction is not derived by this validator yet.',
-    },
-    {
-      localName: 'extension',
-      title: 'XSD extension is unsupported',
-      message: 'xs:extension base types are not expanded.',
-    },
-    {
       localName: 'list',
       title: 'XSD list simple types are unsupported',
       message: 'xs:list simple types are not expanded by this validator yet.',
@@ -848,8 +961,9 @@ const sourceMatchesLocation = (source: XsdSchemaSourceInfo, location: string) =>
 };
 
 const normalizeLocation = (value: string) => value.replace(/\\/g, '/').replace(/^\.\//, '').trim().toLowerCase();
-const basename = (value: string) => normalizeLocation(value).split('/').filter(Boolean).at(-1) ?? normalizeLocation(value);
-const oneOrUndefined = <TValue,>(values: TValue[]) => (values.length === 1 ? values[0] : undefined);
+const basename = (value: string) =>
+  normalizeLocation(value).split('/').filter(Boolean).at(-1) ?? normalizeLocation(value);
+const oneOrUndefined = <TValue>(values: TValue[]) => (values.length === 1 ? values[0] : undefined);
 const stableSourceId = (label: string | undefined, schemaLocation: string | undefined) =>
   `xsd-source-${hashString(`${label ?? ''}:${schemaLocation ?? ''}`)}`;
 

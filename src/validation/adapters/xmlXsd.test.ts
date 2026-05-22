@@ -373,13 +373,15 @@ describe('XML/XSD lite edge cases', () => {
       schemaFormat: 'xsd',
       messageFormat: 'xml',
       schemaText,
-      messageText: '<record xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><note xsi:nil="true" /><status>open</status></record>',
+      messageText:
+        '<record xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><note xsi:nil="true" /><status>open</status></record>',
     });
     const invalid = await validateRequest({
       schemaFormat: 'xsd',
       messageFormat: 'xml',
       schemaText,
-      messageText: '<record xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><note>ok</note><status xsi:nil="true" /></record>',
+      messageText:
+        '<record xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><note>ok</note><status xsi:nil="true" /></record>',
     });
 
     expect(valid.ok).toBe(true);
@@ -470,6 +472,145 @@ describe('XML/XSD lite edge cases', () => {
     );
   });
 
+  it('validates simpleContent extension declared in an included XSD source', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="header-types.xsd" />
+  <xs:element name="Header" type="HeaderType" />
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'header-types',
+          label: 'header-types.xsd',
+          schemaLocation: 'header-types.xsd',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HeaderType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="version" type="xs:string" use="required" />
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+</xs:schema>`,
+        },
+      ],
+      messageText: '<Header version="2.0">Shipment header</Header>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('enforces simpleContent extension base type and required attributes', async () => {
+    const schemaText = `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Weight">
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="xs:decimal">
+          <xs:attribute name="unit" type="xs:string" use="required" />
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+    const invalidText = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText,
+      messageText: '<Weight unit="KG">heavy</Weight>',
+    });
+    const missingAttribute = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText,
+      messageText: '<Weight>12.50</Weight>',
+    });
+
+    expect(invalidText.ok).toBe(false);
+    expect(invalidText.issues.map((issue) => issue.code)).toContain('xml-element-type');
+    expect(missingAttribute.ok).toBe(false);
+    expect(missingAttribute.issues.map((issue) => issue.code)).toContain('missing-xml-attribute');
+  });
+
+  it('applies named simpleType facets through simpleContent extension bases', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Status" type="StatusWithSource" />
+  <xs:simpleType name="StatusBase">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="ORIGINAL" />
+      <xs:enumeration value="UPDATE" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="StatusWithSource">
+    <xs:simpleContent>
+      <xs:extension base="StatusBase">
+        <xs:attribute name="source" type="xs:string" />
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+</xs:schema>`,
+      messageText: '<Status source="EDI">CANCELLED</Status>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.filter((issue) => issue.code === 'xsd-enumeration')).toHaveLength(1);
+  });
+
+  it('rejects child elements inside simpleContent extension values', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Reference">
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="xs:string">
+          <xs:attribute name="type" type="xs:string" />
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      messageText: '<Reference type="carrier"><Value>ABC</Value></Reference>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toContain('xml-element-type');
+  });
+
+  it('keeps simpleContent restriction failing closed', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Code">
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:restriction base="xs:string" />
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      messageText: '<Code>ABC</Code>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toContain('unsupported-xsd-feature');
+    expect(result.issues.map((issue) => issue.title)).toContain('XSD simpleContent restriction is unsupported');
+  });
+
   it('reports unexpected nested elements and sequence order violations', async () => {
     const invalidXml = validComplexShipmentXml
       .replace('<ns:Status>ORIGINAL</ns:Status>', '<ns:Unexpected>nope</ns:Unexpected><ns:Status>ORIGINAL</ns:Status>')
@@ -537,7 +678,8 @@ describe('XML/XSD lite edge cases', () => {
 </xs:schema>`,
         },
       ],
-      messageText: '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion></Header></ShipmentNotification>',
+      messageText:
+        '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion></Header></ShipmentNotification>',
     });
 
     expect(result.ok).toBe(true);

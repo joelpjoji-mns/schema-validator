@@ -37,9 +37,17 @@ export interface XsdAttributeDecl {
   sourceLabel: string;
 }
 
+export interface XsdSimpleContent {
+  baseType: string;
+  range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+}
+
 export interface XsdComplexType {
   name: string;
   group?: XsdParticleGroup;
+  simpleContent?: XsdSimpleContent;
   attributes: XsdAttributeDecl[];
   range: TextRange;
   sourceId: string;
