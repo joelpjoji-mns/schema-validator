@@ -264,7 +264,24 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
 
       values.forEach((item, itemIndex) => {
         const textValue = xmlTextValue(item);
-        if (textValue.trim() === '' && child.minOccurs > 0) {
+        const messageRange =
+          findElementRange(request.messageText, child.name, itemIndex) ??
+          findElementRange(request.messageText, rootRule.name);
+
+        if (isPrimitiveXsdType(child.type) && hasXmlChildElements(item)) {
+          issues.push(
+            makeIssue({
+              code: 'xml-element-type',
+              title: `Element has wrong type: ${child.name}`,
+              message: `<${child.name}> must be ${child.type}, but it contains nested XML elements instead of a simple text value.`,
+              expected: child.type,
+              actual: 'Nested XML elements',
+              schemaRange: child.range,
+              messageRange,
+              hint: 'Replace the nested XML with a simple text value or update the XSD element type.',
+            }),
+          );
+        } else if (!hasXmlContent(item, child.type) && child.minOccurs > 0) {
           issues.push(
             makeIssue({
               code: 'empty-xml-element',
@@ -273,9 +290,7 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
               expected: child.type,
               actual: 'Empty value',
               schemaRange: child.range,
-              messageRange:
-                findElementRange(request.messageText, child.name, itemIndex) ??
-                findElementRange(request.messageText, rootRule.name),
+              messageRange,
             }),
           );
         } else if (!valueMatchesXsdType(textValue, child.type)) {
@@ -287,9 +302,7 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
               expected: child.type,
               actual: textValue,
               schemaRange: child.range,
-              messageRange:
-                findElementRange(request.messageText, child.name, itemIndex) ??
-                findElementRange(request.messageText, rootRule.name),
+              messageRange,
               hint: 'Change the highlighted XML text or update the XSD element type.',
             }),
           );
@@ -416,6 +429,31 @@ const parseMaxOccurs = (value: string | undefined) => {
 
 const formatMaxOccurs = (value: number) => (value === Number.POSITIVE_INFINITY ? 'unbounded' : String(value));
 
+const primitiveXsdTypes = new Set([
+  'xs:string',
+  'string',
+  'xs:integer',
+  'xs:int',
+  'xs:long',
+  'xs:short',
+  'integer',
+  'int',
+  'xs:decimal',
+  'xs:double',
+  'xs:float',
+  'decimal',
+  'double',
+  'float',
+  'xs:boolean',
+  'boolean',
+  'xs:date',
+  'date',
+  'xs:dateTime',
+  'dateTime',
+]);
+
+const isPrimitiveXsdType = (type: string) => primitiveXsdTypes.has(normalizeXsdType(type));
+
 const valueMatchesXsdType = (value: string, type: string) => {
   const normalized = normalizeXsdType(type);
   if (['xs:string', 'string'].includes(normalized)) {
@@ -447,6 +485,22 @@ const xmlTextValue = (value: unknown): string => {
     return String((value as Record<string, unknown>)['#text']);
   }
   return String(value);
+};
+
+const isXmlObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasXmlChildElements = (value: unknown) =>
+  isXmlObject(value) && Object.keys(value).some((key) => !key.startsWith('@_') && key !== '#text');
+
+const hasXmlAttributes = (value: unknown) => isXmlObject(value) && Object.keys(value).some((key) => key.startsWith('@_'));
+
+const hasXmlContent = (value: unknown, type: string) => {
+  if (xmlTextValue(value).trim() !== '') {
+    return true;
+  }
+
+  return !isPrimitiveXsdType(type) && (hasXmlChildElements(value) || hasXmlAttributes(value));
 };
 
 const localName = (name: string) => name.split(':').at(-1) ?? name;
