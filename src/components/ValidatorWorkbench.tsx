@@ -8,6 +8,7 @@ import {
     messageFormatOptions,
     schemaFormatOptions,
     type MessageFormat,
+    type RelatedSchemaDocument,
     type SchemaFormat,
     type TextRange,
     type ValidationIssue,
@@ -17,6 +18,9 @@ import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { EditorPane } from './EditorPane';
 import { FormatSelector } from './FormatSelector';
 import { SchemaSummaryTree } from './SchemaSummaryTree';
+import { SchemaSourcesPanel } from './SchemaSourcesPanel';
+
+const PRIMARY_SCHEMA_SOURCE_ID = 'primary-schema';
 
 export function ValidatorWorkbench() {
   const [schemaFormat, setSchemaFormat] = useState<SchemaFormat>('json-schema');
@@ -30,7 +34,10 @@ export function ValidatorWorkbench() {
   const [schemaTabId, setSchemaTabId] = useState('editor');
   const [manualSchemaFormat, setManualSchemaFormat] = useState(false);
   const [summaryRange, setSummaryRange] = useState<TextRange>();
+  const [xsdSources, setXsdSources] = useState<RelatedSchemaDocument[]>([]);
+  const [selectedXsdSourceId, setSelectedXsdSourceId] = useState<string>();
   const validationRunId = useRef(0);
+  const xsdSourceCounter = useRef(0);
 
   const supportedPair = isSupportedFormatPair(schemaFormat, messageFormat);
   const activeIssue = result?.issues.find((issue) => issue.id === activeIssueId);
@@ -39,7 +46,19 @@ export function ValidatorWorkbench() {
 
   const schemaIssues = useMemo(
     () =>
-      result?.issues.filter((issue) => issue.schemaRange).map((issue) => ({ ...issue, messageRange: undefined })) ?? [],
+      result?.issues
+        .filter(
+          (issue) =>
+            issue.schemaRange && (!issue.schemaSourceId || issue.schemaSourceId === PRIMARY_SCHEMA_SOURCE_ID),
+        )
+        .map((issue) => ({ ...issue, messageRange: undefined })) ?? [],
+    [result],
+  );
+  const xsdSourceIssues = useMemo(
+    () =>
+      result?.issues
+        .filter((issue) => issue.schemaRange && issue.schemaSourceId && issue.schemaSourceId !== PRIMARY_SCHEMA_SOURCE_ID)
+        .map((issue) => ({ ...issue, messageRange: undefined })) ?? [],
     [result],
   );
   const messageIssues = useMemo(
@@ -60,7 +79,13 @@ export function ValidatorWorkbench() {
 
     setIsValidating(true);
     try {
-      const nextResult = await validateRequest({ schemaText, messageText, schemaFormat, messageFormat });
+      const nextResult = await validateRequest({
+        schemaText,
+        messageText,
+        schemaFormat,
+        messageFormat,
+        relatedSchemas: schemaFormat === 'xsd' ? xsdSources : undefined,
+      });
       if (runId !== validationRunId.current) {
         return;
       }
@@ -71,7 +96,7 @@ export function ValidatorWorkbench() {
         setIsValidating(false);
       }
     }
-  }, [messageFormat, messageText, schemaFormat, schemaText]);
+  }, [messageFormat, messageText, schemaFormat, schemaText, xsdSources]);
 
   useEffect(() => {
     if (!autoValidate) {
@@ -126,6 +151,37 @@ export function ValidatorWorkbench() {
   const handleIssueSelect = (issue: ValidationIssue) => {
     setSummaryRange(undefined);
     setActiveIssueId(issue.id);
+    if (issue.schemaSourceId && issue.schemaSourceId !== PRIMARY_SCHEMA_SOURCE_ID) {
+      setSelectedXsdSourceId(issue.schemaSourceId);
+      setSchemaTabId('sources');
+    } else if (issue.schemaRange) {
+      setSchemaTabId('editor');
+    }
+  };
+
+  const handleAddXsdSource = (source: Omit<RelatedSchemaDocument, 'id'>) => {
+    const nextId = `xsd-source-${xsdSourceCounter.current + 1}`;
+    xsdSourceCounter.current += 1;
+    const nextSource = { ...source, id: nextId };
+    setXsdSources((current) => [...current, nextSource]);
+    setSelectedXsdSourceId(nextId);
+    setSchemaTabId('sources');
+  };
+
+  const handleUpdateXsdSource = (sourceId: string, patch: Partial<Omit<RelatedSchemaDocument, 'id'>>) => {
+    setXsdSources((current) =>
+      current.map((source) => (source.id === sourceId ? { ...source, ...patch } : source)),
+    );
+  };
+
+  const handleRemoveXsdSource = (sourceId: string) => {
+    setXsdSources((current) => {
+      const nextSources = current.filter((source) => source.id !== sourceId);
+      if (selectedXsdSourceId === sourceId) {
+        setSelectedXsdSourceId(nextSources[0]?.id);
+      }
+      return nextSources;
+    });
   };
 
   const detectionLabel = manualSchemaFormat
@@ -133,7 +189,38 @@ export function ValidatorWorkbench() {
     : schemaDetection.format
       ? `Detected: ${formatLabel(schemaDetection.format)}`
       : 'No schema detected';
-  const schemaActiveRange = activeIssue?.schemaRange ?? summaryRange;
+  const primarySchemaIssueActive = !activeIssue?.schemaSourceId || activeIssue.schemaSourceId === PRIMARY_SCHEMA_SOURCE_ID;
+  const schemaActiveRange = (primarySchemaIssueActive ? activeIssue?.schemaRange : undefined) ?? summaryRange;
+  const selectedSourceActiveRange = !primarySchemaIssueActive ? activeIssue?.schemaRange : undefined;
+  const schemaTabs = [
+    { id: 'editor', label: 'Editor' },
+    {
+      id: 'summary',
+      label: 'Summary',
+      content: <SchemaSummaryTree summary={schemaSummary} onNodeSelect={handleSummaryNodeSelect} />,
+    },
+    ...(schemaFormat === 'xsd'
+      ? [
+          {
+            id: 'sources',
+            label: 'Sources',
+            content: (
+              <SchemaSourcesPanel
+                schemaText={schemaText}
+                sources={xsdSources}
+                selectedSourceId={selectedXsdSourceId}
+                issues={xsdSourceIssues}
+                activeRange={selectedSourceActiveRange}
+                onAddSource={handleAddXsdSource}
+                onUpdateSource={handleUpdateXsdSource}
+                onRemoveSource={handleRemoveXsdSource}
+                onSelectSource={setSelectedXsdSourceId}
+              />
+            ),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <main className="app-shell">
@@ -192,15 +279,12 @@ export function ValidatorWorkbench() {
             issues={schemaIssues}
             activeRange={schemaActiveRange}
             onChange={handleSchemaTextChange}
-            headingMeta={<span className="pane-meta">{schemaSummary.stats.nodes} summary nodes</span>}
-            tabs={[
-              { id: 'editor', label: 'Editor' },
-              {
-                id: 'summary',
-                label: 'Summary',
-                content: <SchemaSummaryTree summary={schemaSummary} onNodeSelect={handleSummaryNodeSelect} />,
-              },
-            ]}
+            headingMeta={
+              <span className="pane-meta">
+                {schemaSummary.stats.nodes} summary nodes{schemaFormat === 'xsd' ? ` / ${xsdSources.length} sources` : ''}
+              </span>
+            }
+            tabs={schemaTabs}
             activeTabId={schemaTabId}
             onTabChange={setSchemaTabId}
           />

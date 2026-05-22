@@ -197,6 +197,16 @@ select {
   border-color: #cbd5e1;
 }
 
+.danger-button {
+  color: #9f1239;
+  border-color: #fecdd3;
+  background: #fff1f2;
+}
+
+.danger-button:hover {
+  background: #ffe4e6;
+}
+
 .control-row {
   display: flex;
   justify-content: space-between;
@@ -363,6 +373,219 @@ select {
   min-height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.schema-sources {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #fbfdff;
+}
+
+.sources-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid #d7dee8;
+}
+
+.sources-stats,
+.sources-actions,
+.source-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sources-stats {
+  color: #334155;
+  font-size: 12px;
+}
+
+.sources-stats strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.sources-stats span,
+.source-status {
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #475569;
+  background: #e2e8f0;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sources-layout {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+}
+
+.sources-sidebar {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid #d7dee8;
+  background: #ffffff;
+}
+
+.sources-section-title {
+  padding: 10px 10px 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.sources-reference-list,
+.source-list {
+  display: grid;
+  gap: 6px;
+  padding: 0 8px 10px;
+}
+
+.source-reference {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  padding: 8px;
+  color: #334155;
+  background: #f8fafc;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.source-reference strong {
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.source-status {
+  width: fit-content;
+}
+
+.source-status.is-resolved {
+  color: #0c513d;
+  background: #dff6ed;
+}
+
+.source-status.is-missing {
+  color: #9f1239;
+  background: #ffe4e6;
+}
+
+.sources-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+  padding: 10px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-list-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  padding: 8px;
+  color: #27364a;
+  background: #ffffff;
+  text-align: left;
+}
+
+.source-list-item.is-active {
+  border-color: #255e7e;
+  background: #eaf3f7;
+}
+
+.source-list-item span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.source-list-item strong,
+.source-list-item span span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-list-item strong {
+  font-size: 12px;
+}
+
+.source-list-item span span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.source-list-item em {
+  min-width: 22px;
+  min-height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #dc2626;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.source-editor-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-fields {
+  padding: 10px;
+  border-bottom: 1px solid #d7dee8;
+  background: #ffffff;
+}
+
+.source-fields label {
+  min-width: min(180px, 100%);
+  flex: 1;
+  display: grid;
+  gap: 4px;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.source-fields input {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #b8c3d1;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: #172033;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.source-editor-frame {
+  min-height: 260px;
+  flex: 1;
+}
+
+.source-editor-empty {
+  margin: 10px;
 }
 
 .summary-toolbar {
@@ -723,6 +946,22 @@ select {
   .secondary-button,
   .toggle-control {
     width: 100%;
+  }
+
+  .sources-toolbar,
+  .sources-actions,
+  .source-fields {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sources-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sources-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #d7dee8;
   }
 
   .field-label {

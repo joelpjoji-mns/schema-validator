@@ -8,6 +8,13 @@ const setEditorText = async (page: import('@playwright/test').Page, paneTitle: s
   await page.keyboard.insertText(text);
 };
 
+const setSourceEditorText = async (page: import('@playwright/test').Page, text: string) => {
+  await page.locator('.source-editor-frame .monaco-editor').click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText(text);
+};
+
 test('starts empty, detects XSD, and shows the schema summary tree', async ({ page }) => {
   await page.goto('/');
 
@@ -55,4 +62,42 @@ test('reruns validation after the message changes', async ({ page }) => {
   await setEditorText(page, 'Message', '{}');
 
   await expect(page.getByText(/Missing required field: name/i)).toBeVisible();
+});
+
+test('resolves an XSD include from the Sources tab', async ({ page }) => {
+  await page.goto('/');
+  await setEditorText(
+    page,
+    'Schema',
+    `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="header-types.xsd" />
+  <xs:element name="ShipmentNotification">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="HeaderType" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+  );
+  await setEditorText(page, 'Message', '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion></Header></ShipmentNotification>');
+
+  await expect(page.getByText(/Missing XSD include: header-types\.xsd/i)).toBeVisible();
+
+  await page.getByRole('tab', { name: /sources/i }).click();
+  await page.getByRole('button', { name: /add xsd/i }).click();
+  await page.getByLabel('schemaLocation').fill('header-types.xsd');
+  await setSourceEditorText(
+    page,
+    `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="EnvelopeVersion" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+  );
+
+  await expect(page.getByRole('heading', { name: /validation passed/i })).toBeVisible();
+  await expect(page.locator('.source-status.is-resolved', { hasText: 'Resolved' })).toBeVisible();
 });

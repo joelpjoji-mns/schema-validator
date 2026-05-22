@@ -35,14 +35,19 @@ interface XmlElementNode {
 
 interface ResolvedElement {
   declaration: XsdElementDecl;
-  occurrence: Pick<XsdElementDecl, 'minOccurs' | 'maxOccurs' | 'range'>;
+  occurrence: Pick<XsdElementDecl, 'minOccurs' | 'maxOccurs' | 'range' | 'sourceId' | 'sourceLabel'>;
   missingRef?: string;
 }
 
 interface ResolvedAttribute {
   declaration: XsdAttributeDecl;
-  use: Pick<XsdAttributeDecl, 'required' | 'prohibited' | 'range'>;
+  use: Pick<XsdAttributeDecl, 'required' | 'prohibited' | 'range' | 'sourceId' | 'sourceLabel'>;
   missingRef?: string;
+}
+
+interface SchemaSourceOwner {
+  sourceId: string;
+  sourceLabel: string;
 }
 
 export const validateXmlAgainstXsdModel = (model: XsdSchemaModel, xmlText: string): ValidationIssue[] => {
@@ -85,6 +90,8 @@ class XsdModelValidator {
           title: 'No root element rule found',
           message: 'The XSD does not contain a top-level xs:element declaration to use as the XML document root.',
           schemaRange: wholeDocumentRange(this.model.schemaText),
+          schemaSourceId: this.model.primarySourceId,
+          schemaSourceLabel: this.sourceLabel(this.model.primarySourceId),
           messageRange: this.root.range,
         }),
       );
@@ -100,6 +107,7 @@ class XsdModelValidator {
           expected: `<${rootDeclaration.name}>`,
           actual: `<${this.root.localName}>`,
           schemaRange: rootDeclaration.range,
+          ...schemaSource(rootDeclaration),
           messageRange: this.root.range,
         }),
       );
@@ -118,6 +126,8 @@ class XsdModelValidator {
           title: feature.title,
           message: feature.message,
           schemaRange: feature.range,
+          schemaSourceId: feature.sourceId,
+          schemaSourceLabel: feature.sourceLabel,
           messageRange: this.root?.range,
           hint: 'Validation fails closed so this schema is not incorrectly reported as passing.',
         }),
@@ -154,6 +164,7 @@ class XsdModelValidator {
           expected: resolved.missingRef,
           actual: 'Missing global element',
           schemaRange: declaration.range,
+          ...schemaSource(declaration),
           messageRange: values[0]?.range ?? this.root?.range,
         }),
       );
@@ -174,6 +185,7 @@ class XsdModelValidator {
           expected: `minOccurs=${occurrence.minOccurs}`,
           actual: `${values.length} occurrence${values.length === 1 ? '' : 's'}`,
           schemaRange: occurrence.range,
+          ...schemaSource(occurrence),
           messageRange: this.parentMessageRange(parentPath),
           hint: `Add <${element.name}>...</${element.name}> inside the highlighted parent element.`,
         }),
@@ -191,6 +203,7 @@ class XsdModelValidator {
           expected: `maxOccurs=${formatMaxOccurs(occurrence.maxOccurs)}`,
           actual: `${values.length} occurrence${values.length === 1 ? '' : 's'}`,
           schemaRange: occurrence.range,
+          ...schemaSource(occurrence),
           messageRange: values[firstExtraIndex(occurrence.maxOccurs)]?.range ?? values.at(-1)?.range,
         }),
       );
@@ -223,14 +236,15 @@ class XsdModelValidator {
         element.range,
         value.range,
         path,
+        simpleType,
       );
       if (value.children.length > 0) {
-        this.addPrimitiveChildIssue(element.name, typeName, value, element.range, path);
+        this.addPrimitiveChildIssue(element.name, typeName, value, element.range, path, element);
       }
     } else if (isBuiltinType(typeName)) {
-      this.validateSimpleValue(value.text.trim(), typeName, [], element.name, element.range, value.range, path);
+      this.validateSimpleValue(value.text.trim(), typeName, [], element.name, element.range, value.range, path, element);
       if (value.children.length > 0) {
-        this.addPrimitiveChildIssue(element.name, typeName, value, element.range, path);
+        this.addPrimitiveChildIssue(element.name, typeName, value, element.range, path, element);
       }
     } else {
       this.issues.push(
@@ -242,6 +256,7 @@ class XsdModelValidator {
           expected: typeName,
           actual: 'Missing type declaration',
           schemaRange: element.range,
+          ...schemaSource(element),
           messageRange: value.range,
         }),
       );
@@ -266,6 +281,7 @@ class XsdModelValidator {
           expected: complexType.name,
           actual: 'Empty value',
           schemaRange: element.range,
+          ...schemaSource(element),
           messageRange: value.range,
         }),
       );
@@ -279,6 +295,7 @@ class XsdModelValidator {
           message: `Type ${complexType.name} refers back to itself. This branch is not expanded to avoid an infinite validation loop.`,
           path,
           schemaRange: complexType.range,
+          ...schemaSource(complexType),
           messageRange: value.range,
           hint: 'Validation fails closed for recursive types until recursive validation is explicitly supported.',
         }),
@@ -301,6 +318,7 @@ class XsdModelValidator {
             expected: 'No child elements',
             actual: `<${child.localName}>`,
             schemaRange: complexType.range,
+            ...schemaSource(complexType),
             messageRange: child.range,
           }),
         );
@@ -322,6 +340,7 @@ class XsdModelValidator {
             message: `The schema references attribute ${resolved.missingRef}, but no global attribute with that name was found.`,
             path,
             schemaRange: attribute.range,
+            ...schemaSource(attribute),
             messageRange: value.range,
           }),
         );
@@ -341,6 +360,7 @@ class XsdModelValidator {
             expected: `No @${declaration.name}`,
             actual: `@${declaration.name}`,
             schemaRange: resolved.use.range,
+            ...schemaSource(resolved.use),
             messageRange: actual.range ?? value.range,
           }),
         );
@@ -354,6 +374,7 @@ class XsdModelValidator {
             expected: `@${declaration.name}`,
             actual: 'Missing attribute',
             schemaRange: resolved.use.range,
+            ...schemaSource(resolved.use),
             messageRange: value.range,
           }),
         );
@@ -373,6 +394,7 @@ class XsdModelValidator {
             expected: [...allowed].join(', ') || 'No attributes',
             actual: `@${attribute.name}`,
             schemaRange: complexType.range,
+            ...schemaSource(complexType),
             messageRange: attribute.range ?? value.range,
           }),
         );
@@ -392,6 +414,7 @@ class XsdModelValidator {
         attribute.range,
         value.range,
         path,
+        simpleType,
       );
     } else if (isBuiltinType(typeName)) {
       this.validateSimpleValue(
@@ -402,6 +425,7 @@ class XsdModelValidator {
         attribute.range,
         value.range,
         path,
+        attribute,
       );
     } else {
       this.issues.push(
@@ -411,6 +435,7 @@ class XsdModelValidator {
           message: `The schema references type ${typeName}, but this type is not declared in the XSD.`,
           path,
           schemaRange: attribute.range,
+          ...schemaSource(attribute),
           messageRange: value.range,
         }),
       );
@@ -433,6 +458,7 @@ class XsdModelValidator {
             expected: [...allowedNames].join(', ') || 'No child elements',
             actual: `<${child.localName}>`,
             schemaRange: group.range,
+            ...schemaSource(group),
             messageRange: child.range,
           }),
         );
@@ -450,6 +476,7 @@ class XsdModelValidator {
             expected: [...allowedNames].join(' or '),
             actual: 'No choice element present',
             schemaRange: group.range,
+            ...schemaSource(group),
             messageRange: value.range,
           }),
         );
@@ -463,6 +490,7 @@ class XsdModelValidator {
             expected: `maxOccurs=${formatMaxOccurs(group.maxOccurs)}`,
             actual: `${presentAllowed.length} choice elements`,
             schemaRange: group.range,
+            ...schemaSource(group),
             messageRange: presentAllowed[group.maxOccurs]?.range ?? presentAllowed.at(-1)?.range ?? value.range,
           }),
         );
@@ -503,6 +531,7 @@ class XsdModelValidator {
             expected: group.elements.map((element) => `<${this.resolvedElementName(element)}>`).join(' then '),
             actual: presentChildren.map((element) => `<${element.localName}>`).join(', '),
             schemaRange: group.range,
+            ...schemaSource(group),
             messageRange: child.range,
             hint: 'Move the highlighted element so the XML child order matches the XSD sequence order.',
           }),
@@ -521,6 +550,7 @@ class XsdModelValidator {
     schemaRange: TextRange,
     messageRange: TextRange | undefined,
     path: string,
+    schemaOwner: SchemaSourceOwner,
     seenTypes = new Set<string>(),
   ) {
     const normalizedType = normalizeTypeName(typeName);
@@ -534,6 +564,7 @@ class XsdModelValidator {
             message: `Simple type ${normalizedType} refers back to itself.`,
             path,
             schemaRange: customType.range,
+            ...schemaSource(customType),
             messageRange,
           }),
         );
@@ -548,6 +579,7 @@ class XsdModelValidator {
         customType.range,
         messageRange,
         path,
+        customType,
         nextSeen,
       );
       return;
@@ -563,6 +595,7 @@ class XsdModelValidator {
           expected: normalizedType,
           actual: value,
           schemaRange,
+          ...schemaSource(schemaOwner),
           messageRange,
         }),
       );
@@ -595,6 +628,7 @@ class XsdModelValidator {
             expected: sameKind.join(', '),
             actual: value,
             schemaRange,
+            ...schemaSource(restriction),
             messageRange,
           }),
         );
@@ -612,6 +646,7 @@ class XsdModelValidator {
               expected: restriction.value,
               actual: value,
               schemaRange,
+              ...schemaSource(restriction),
               messageRange,
             }),
           );
@@ -624,6 +659,7 @@ class XsdModelValidator {
             message: `The XSD pattern ${restriction.value} cannot be compiled by the browser validator.`,
             path,
             schemaRange,
+            ...schemaSource(restriction),
             messageRange,
           }),
         );
@@ -743,6 +779,7 @@ class XsdModelValidator {
         expected: `${restriction.kind}=${restriction.value}`,
         actual: value,
         schemaRange,
+        ...schemaSource(restriction),
         messageRange,
       }),
     );
@@ -788,6 +825,7 @@ class XsdModelValidator {
           message: `Validation stopped at ${path} to avoid freezing the browser.`,
           path,
           schemaRange: element.range,
+          ...schemaSource(element),
           messageRange: value.range,
         }),
       );
@@ -802,6 +840,7 @@ class XsdModelValidator {
           message: 'The XML message is too large for safe in-browser validation in this pass.',
           path,
           schemaRange: element.range,
+          ...schemaSource(element),
           messageRange: value.range,
         }),
       );
@@ -828,6 +867,7 @@ class XsdModelValidator {
           expected: 'nillable="true"',
           actual: 'xsi:nil="true"',
           schemaRange: element.range,
+          ...schemaSource(element),
           messageRange: nilAttribute?.range ?? value.range,
         }),
       );
@@ -844,6 +884,7 @@ class XsdModelValidator {
           expected: 'Empty nil element',
           actual: 'Element content',
           schemaRange: element.range,
+          ...schemaSource(element),
           messageRange: value.range,
         }),
       );
@@ -871,6 +912,7 @@ class XsdModelValidator {
     value: XmlElementNode,
     schemaRange: TextRange,
     path: string,
+    schemaOwner: SchemaSourceOwner,
   ) {
     this.issues.push(
       makeIssue({
@@ -881,12 +923,22 @@ class XsdModelValidator {
         expected: typeName,
         actual: 'Nested XML elements',
         schemaRange,
+        ...schemaSource(schemaOwner),
         messageRange: value.range,
         hint: 'Replace the nested XML with a simple text value or update the XSD element type.',
       }),
     );
   }
+
+  private sourceLabel(sourceId: string | undefined) {
+    return this.model.sources.find((source) => source.id === sourceId)?.label;
+  }
 }
+
+const schemaSource = (source: SchemaSourceOwner) => ({
+  schemaSourceId: source.sourceId,
+  schemaSourceLabel: source.sourceLabel,
+});
 
 const parseXmlInstance = (xmlText: string): XmlElementNode | undefined => {
   const parser = new XMLParser({

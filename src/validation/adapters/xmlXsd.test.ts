@@ -506,4 +506,152 @@ describe('XML/XSD lite edge cases', () => {
     expect(result.ok).toBe(false);
     expect(result.issues.map((issue) => issue.code)).toContain('unsupported-xsd-feature');
   });
+
+  it('resolves xs:include from user supplied XSD sources', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="header-types.xsd" />
+  <xs:element name="ShipmentNotification">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="HeaderType" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'header-types',
+          label: 'header-types.xsd',
+          schemaLocation: 'header-types.xsd',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="EnvelopeVersion" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+        },
+      ],
+      messageText: '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion></Header></ShipmentNotification>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('resolves xs:import by namespace and schemaLocation', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:common="https://example.test/common">
+  <xs:import namespace="https://example.test/common" schemaLocation="common.xsd" />
+  <xs:element name="Envelope" type="common:EnvelopeType" />
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'common',
+          label: 'common.xsd',
+          schemaLocation: 'common.xsd',
+          namespace: 'https://example.test/common',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="https://example.test/common">
+  <xs:complexType name="EnvelopeType">
+    <xs:sequence>
+      <xs:element name="MessageId" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+        },
+      ],
+      messageText: '<Envelope><MessageId>MSG-1</MessageId></Envelope>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('fails closed for unresolved includes until the source is added', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="missing-types.xsd" />
+  <xs:element name="root" type="MissingType" />
+</xs:schema>`,
+      messageText: '<root />',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toContain('unsupported-xsd-feature');
+    expect(result.issues.map((issue) => issue.title)).toContain('Missing XSD include: missing-types.xsd');
+  });
+
+  it('reports namespace mismatches for included schemas', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="https://example.test/main">
+  <xs:include schemaLocation="other.xsd" />
+  <xs:element name="root" type="xs:string" />
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'other',
+          label: 'other.xsd',
+          schemaLocation: 'other.xsd',
+          namespace: 'https://example.test/other',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="https://example.test/other">
+  <xs:complexType name="OtherType" />
+</xs:schema>`,
+        },
+      ],
+      messageText: '<root>ok</root>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.title)).toContain('Included XSD namespace mismatch: other.xsd');
+  });
+
+  it('keeps schema source metadata for errors from included simple types', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="status-types.xsd" />
+  <xs:element name="Status" type="StatusType" />
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'status-types',
+          label: 'status-types.xsd',
+          schemaLocation: 'status-types.xsd',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="StatusType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="ORIGINAL" />
+      <xs:enumeration value="UPDATE" />
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>`,
+        },
+      ],
+      messageText: '<Status>INVALID</Status>',
+    });
+
+    const enumIssue = result.issues.find((issue) => issue.code === 'xsd-enumeration');
+    expect(result.ok).toBe(false);
+    expect(enumIssue?.schemaSourceId).toBe('status-types');
+    expect(enumIssue?.schemaSourceLabel).toBe('status-types.xsd');
+  });
 });

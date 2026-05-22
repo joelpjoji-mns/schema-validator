@@ -139,6 +139,8 @@ export const makeIssue = (
     messagePointer: issue.messagePointer,
     schemaRange: issue.schemaRange,
     messageRange: issue.messageRange,
+    schemaSourceId: issue.schemaSourceId,
+    schemaSourceLabel: issue.schemaSourceLabel,
   });
 
   return {

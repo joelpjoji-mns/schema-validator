@@ -57,6 +57,32 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
     return resultFromIssues(start, issues);
   }
 
+  for (const source of request.relatedSchemas ?? []) {
+    if (!source.text.trim()) {
+      continue;
+    }
+
+    const sourceSyntax = XMLValidator.validate(source.text, { allowBooleanAttributes: true });
+    if (sourceSyntax !== true) {
+      const err = sourceSyntax.err;
+      issues.push(
+        makeIssue({
+          code: 'malformed-xsd',
+          title: `Malformed XSD: ${source.label}`,
+          message: err.msg,
+          schemaRange: rangeFromLineColumn(source.text, err.line, err.col),
+          schemaSourceId: source.id,
+          schemaSourceLabel: source.label,
+          hint: 'Fix the highlighted auxiliary XSD syntax before validating the XML instance.',
+        }),
+      );
+    }
+  }
+
+  if (issues.length > 0) {
+    return resultFromIssues(start, issues);
+  }
+
   const xmlSyntax = XMLValidator.validate(request.messageText, { allowBooleanAttributes: true });
   if (xmlSyntax !== true) {
     const err = xmlSyntax.err;
@@ -72,7 +98,14 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
     return resultFromIssues(start, issues);
   }
 
-  const parsedModel = parseXsdModel(request.schemaText);
+  const parsedModel = parseXsdModel({
+    primary: {
+      id: 'primary-schema',
+      label: 'Main schema',
+      text: request.schemaText,
+    },
+    relatedSchemas: request.relatedSchemas,
+  });
   if (!parsedModel.ok) {
     return resultFromIssues(start, parsedModel.issues);
   }

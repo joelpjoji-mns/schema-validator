@@ -34,6 +34,16 @@ export interface ValidationIssue {
   messageRange?: TextRange;
   schemaPointer?: string;
   messagePointer?: string;
+  schemaSourceId?: string;
+  schemaSourceLabel?: string;
+}
+
+export interface RelatedSchemaDocument {
+  id: string;
+  label: string;
+  schemaLocation?: string;
+  namespace?: string;
+  text: string;
 }
 
 export interface ValidationRequest {
@@ -41,6 +51,7 @@ export interface ValidationRequest {
   messageText: string;
   schemaFormat: SchemaFormat;
   messageFormat: MessageFormat;
+  relatedSchemas?: RelatedSchemaDocument[];
 }
 
 export interface ValidationResult {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { validateRequest } from '../validation/registry';
@@ -140,6 +140,62 @@ describe('ValidatorWorkbench', () => {
 
     await waitFor(() => expect(screen.getByText(/Missing required field: name/i)).toBeInTheDocument());
     expect(screen.queryByRole('heading', { name: /validation passed/i })).not.toBeInTheDocument();
+  });
+
+  it('validates again when an included XSD source is added in the Sources tab', async () => {
+    const user = userEvent.setup();
+    render(<ValidatorWorkbench />);
+
+    const [schemaEditor, messageEditor] = screen.getAllByRole('textbox');
+    fireEvent.change(schemaEditor, {
+      target: {
+        value: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="header-types.xsd" />
+  <xs:element name="ShipmentNotification">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="HeaderType" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      },
+    });
+    fireEvent.change(messageEditor, {
+      target: {
+        value: '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion></Header></ShipmentNotification>',
+      },
+    });
+
+    await waitFor(() => expect(screen.getByText(/Missing XSD include: header-types\.xsd/i)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('tab', { name: /sources/i }));
+    await user.click(screen.getByRole('button', { name: /add xsd/i }));
+
+    const sourcePanel = screen.getByLabelText('Selected XSD source');
+    fireEvent.change(within(sourcePanel).getByLabelText(/schemaLocation/i), {
+      target: { value: 'header-types.xsd' },
+    });
+    fireEvent.change(within(sourcePanel).getByLabelText('mock-editor-xml'), {
+      target: {
+        value: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="EnvelopeVersion" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+      },
+    });
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: /validation passed/i })).toBeInTheDocument());
+    expect(mockedValidateRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        relatedSchemas: [expect.objectContaining({ schemaLocation: 'header-types.xsd' })],
+      }),
+    );
   });
 
   it('shows a compact upload error when a selected file cannot be read', async () => {

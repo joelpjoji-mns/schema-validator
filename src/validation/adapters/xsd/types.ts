@@ -1,4 +1,4 @@
-import type { TextRange, ValidationIssue } from '../../types';
+import type { RelatedSchemaDocument, TextRange, ValidationIssue } from '../../types';
 
 export type XsdContainerKind = 'sequence' | 'choice' | 'all';
 export type XsdMaxOccurs = number;
@@ -12,6 +12,8 @@ export interface XsdParticleGroup extends XsdOccurrence {
   kind: XsdContainerKind;
   elements: XsdElementDecl[];
   range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
 }
 
 export interface XsdElementDecl extends XsdOccurrence {
@@ -20,6 +22,8 @@ export interface XsdElementDecl extends XsdOccurrence {
   refName?: string;
   nillable: boolean;
   range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
 }
 
 export interface XsdAttributeDecl {
@@ -29,6 +33,8 @@ export interface XsdAttributeDecl {
   required: boolean;
   prohibited: boolean;
   range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
 }
 
 export interface XsdComplexType {
@@ -36,6 +42,8 @@ export interface XsdComplexType {
   group?: XsdParticleGroup;
   attributes: XsdAttributeDecl[];
   range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
 }
 
 export type XsdRestrictionKind =
@@ -55,6 +63,8 @@ export interface XsdRestriction {
   kind: XsdRestrictionKind;
   value: string;
   range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
 }
 
 export interface XsdSimpleType {
@@ -62,6 +72,8 @@ export interface XsdSimpleType {
   baseType: string;
   restrictions: XsdRestriction[];
   range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
 }
 
 export interface XsdUnsupportedFeature {
@@ -69,10 +81,31 @@ export interface XsdUnsupportedFeature {
   title: string;
   message: string;
   range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+}
+
+export interface XsdSchemaSourceInfo extends RelatedSchemaDocument {
+  isPrimary: boolean;
+  targetNamespace?: string;
+}
+
+export interface XsdExternalReference {
+  kind: 'include' | 'import';
+  schemaLocation?: string;
+  namespace?: string;
+  range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+  resolvedSourceId?: string;
+  resolvedSourceLabel?: string;
 }
 
 export interface XsdSchemaModel {
   schemaText: string;
+  primarySourceId: string;
+  sources: XsdSchemaSourceInfo[];
+  externalReferences: XsdExternalReference[];
   rootElementName?: string;
   globalElements: Map<string, XsdElementDecl>;
   complexTypes: Map<string, XsdComplexType>;

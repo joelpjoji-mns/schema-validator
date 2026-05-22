@@ -70,6 +70,7 @@ export function DiagnosticsPanel({ result, activeIssueId, onIssueSelect }: Diagn
               <span>{issue.message}</span>
               <span className="issue-meta">
                 {issue.code}
+                {issue.schemaSourceLabel ? ` / ${issue.schemaSourceLabel}` : ''}
                 {issue.path ? ` / ${issue.path}` : ''}
               </span>
             </span>
