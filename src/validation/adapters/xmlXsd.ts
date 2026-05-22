@@ -228,7 +228,6 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
   }
 
   for (const { child, values, isMissing } of childStates) {
-
     if (rootRule.containerType !== 'choice' && child.minOccurs > 0 && isMissing) {
       issues.push(
         makeIssue({
@@ -336,11 +335,7 @@ const extractRootRule = (xsdText: string): XsdRootRule | undefined => {
   const rootEnd = findClosingTagOffset(xsdText, rootStart, 'element') ?? elementMatch.index + elementMatch[0].length;
   const rootBlock = xsdText.slice(rootStart, rootEnd);
   const rootRange = rangeFromOffsetSafe(xsdText, rootStart, rootEnd - rootStart);
-  const containerType = rootBlock.includes(':choice')
-    ? 'choice'
-    : rootBlock.includes(':all')
-      ? 'all'
-      : 'sequence';
+  const containerType = rootBlock.includes(':choice') ? 'choice' : rootBlock.includes(':all') ? 'all' : 'sequence';
 
   const children: XsdChildRule[] = [];
   const childPattern = /<(?:xs|xsd):element\b([^>]*?)\/?>(?!\s*<(?:xs|xsd):complexType)/gi;
@@ -465,16 +460,15 @@ const getChildValue = (record: Record<string, unknown>, name: string) => {
 };
 
 const getAttributeValue = (record: Record<string, unknown>, name: string) => {
-  const key = Object.keys(record).find((candidate) => candidate.startsWith('@_') && localName(candidate.slice(2)) === name);
+  const key = Object.keys(record).find(
+    (candidate) => candidate.startsWith('@_') && localName(candidate.slice(2)) === name,
+  );
   return key ? record[key] : undefined;
 };
 
 const findElementRange = (xmlText: string, name: string, occurrence = 0) => {
   const tagName = `(?:[A-Za-z_][\\w.-]*:)?${escapeRegExp(localName(name))}`;
-  const pattern = new RegExp(
-    `<${tagName}\\b[^>]*>(?:[\\s\\S]*?<\\/${tagName}>)?|<${tagName}\\b[^>]*/>`,
-    'g',
-  );
+  const pattern = new RegExp(`<${tagName}\\b[^>]*>(?:[\\s\\S]*?<\\/${tagName}>)?|<${tagName}\\b[^>]*/>`, 'g');
   let match: RegExpExecArray | null;
   let current = 0;
 

@@ -1,7 +1,7 @@
 import AjvDraft7, { type AnySchema, type ErrorObject } from 'ajv';
+import addFormats from 'ajv-formats';
 import Ajv2019 from 'ajv/dist/2019';
 import Ajv2020 from 'ajv/dist/2020';
-import addFormats from 'ajv-formats';
 import { parseMessageDocument, parseSchemaDocument, type SourceDocument } from '../structuredParsers';
 import {
     describeActual,
@@ -118,9 +118,10 @@ const createAjv = (schemaData: unknown): AjvDraft7 => {
     messages: true,
     verbose: true,
   };
-  const schemaUri = schemaData && typeof schemaData === 'object' && '$schema' in schemaData
-    ? String((schemaData as { $schema?: unknown }).$schema ?? '').toLowerCase()
-    : '';
+  const schemaUri =
+    schemaData && typeof schemaData === 'object' && '$schema' in schemaData
+      ? String((schemaData as { $schema?: unknown }).$schema ?? '').toLowerCase()
+      : '';
   const AjvClass = schemaUri.includes('2020-12')
     ? Ajv2020
     : schemaUri.includes('2019-09') || usesModernJsonSchemaKeywords(schemaData)
@@ -382,7 +383,9 @@ const mapAjvError = (
 
   if (error.keyword === 'dependentRequired') {
     const property = String((error.params as { property?: unknown }).property ?? 'the triggering property');
-    const missingProperty = String((error.params as { missingProperty?: unknown }).missingProperty ?? 'a dependent property');
+    const missingProperty = String(
+      (error.params as { missingProperty?: unknown }).missingProperty ?? 'a dependent property',
+    );
 
     return makeIssue({
       ...base,
@@ -411,7 +414,8 @@ const mapAjvError = (
   }
 
   if (['contains', 'minContains', 'maxContains'].includes(error.keyword)) {
-    const limit = (error.params as { minContains?: unknown; maxContains?: unknown }).minContains ??
+    const limit =
+      (error.params as { minContains?: unknown; maxContains?: unknown }).minContains ??
       (error.params as { maxContains?: unknown }).maxContains;
 
     return makeIssue({
@@ -454,7 +458,9 @@ const mapAjvError = (
   }
 
   if (['unevaluatedProperties', 'unevaluatedItems'].includes(error.keyword)) {
-    const unevaluatedProperty = String((error.params as { unevaluatedProperty?: unknown }).unevaluatedProperty ?? 'an unevaluated value');
+    const unevaluatedProperty = String(
+      (error.params as { unevaluatedProperty?: unknown }).unevaluatedProperty ?? 'an unevaluated value',
+    );
 
     return makeIssue({
       ...base,
