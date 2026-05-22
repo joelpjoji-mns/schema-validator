@@ -1,34 +1,40 @@
 import { Play, ShieldCheck, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { defaultSample, type ValidationSample } from '../fixtures/samples';
+import { introspectSchema, type SchemaSummaryNode } from '../validation/introspection';
 import { isSupportedFormatPair, supportedMessageFormatsForSchema, validateRequest } from '../validation/registry';
+import { detectSchemaFormat } from '../validation/schemaDetection';
 import {
     formatLabel,
     messageFormatOptions,
     schemaFormatOptions,
     type MessageFormat,
     type SchemaFormat,
+    type TextRange,
     type ValidationIssue,
     type ValidationResult,
 } from '../validation/types';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { EditorPane } from './EditorPane';
 import { FormatSelector } from './FormatSelector';
-import { SampleLibrary } from './SampleLibrary';
+import { SchemaSummaryTree } from './SchemaSummaryTree';
 
 export function ValidatorWorkbench() {
-  const [schemaFormat, setSchemaFormat] = useState<SchemaFormat>(defaultSample.schemaFormat);
-  const [messageFormat, setMessageFormat] = useState<MessageFormat>(defaultSample.messageFormat);
-  const [schemaText, setSchemaText] = useState(defaultSample.schemaText);
-  const [messageText, setMessageText] = useState(defaultSample.messageText);
-  const [activeSampleId, setActiveSampleId] = useState(defaultSample.id);
+  const [schemaFormat, setSchemaFormat] = useState<SchemaFormat>('json-schema');
+  const [messageFormat, setMessageFormat] = useState<MessageFormat>('json');
+  const [schemaText, setSchemaText] = useState('');
+  const [messageText, setMessageText] = useState('');
   const [result, setResult] = useState<ValidationResult | null>(null);
   const [activeIssueId, setActiveIssueId] = useState<string>();
   const [autoValidate, setAutoValidate] = useState(true);
   const [isValidating, setIsValidating] = useState(false);
+  const [schemaTabId, setSchemaTabId] = useState('editor');
+  const [manualSchemaFormat, setManualSchemaFormat] = useState(false);
+  const [summaryRange, setSummaryRange] = useState<TextRange>();
 
   const supportedPair = isSupportedFormatPair(schemaFormat, messageFormat);
   const activeIssue = result?.issues.find((issue) => issue.id === activeIssueId);
+  const schemaDetection = useMemo(() => detectSchemaFormat(schemaText), [schemaText]);
+  const schemaSummary = useMemo(() => introspectSchema({ schemaText, schemaFormat }), [schemaFormat, schemaText]);
 
   const schemaIssues = useMemo(
     () =>
@@ -42,6 +48,12 @@ export function ValidatorWorkbench() {
   );
 
   const runValidation = useCallback(async () => {
+    if (!schemaText.trim() && !messageText.trim()) {
+      setResult(null);
+      setActiveIssueId(undefined);
+      return;
+    }
+
     setIsValidating(true);
     try {
       const nextResult = await validateRequest({ schemaText, messageText, schemaFormat, messageFormat });
@@ -64,22 +76,55 @@ export function ValidatorWorkbench() {
     return () => window.clearTimeout(timeout);
   }, [autoValidate, runValidation]);
 
-  const loadSample = (sample: ValidationSample) => {
-    setActiveSampleId(sample.id);
-    setSchemaFormat(sample.schemaFormat);
-    setMessageFormat(sample.messageFormat);
-    setSchemaText(sample.schemaText);
-    setMessageText(sample.messageText);
-    setActiveIssueId(undefined);
+  const handleSchemaTextChange = (nextText: string) => {
+    const nextDetection = detectSchemaFormat(nextText);
+    setSchemaText(nextText);
+    setManualSchemaFormat(false);
+    setSummaryRange(undefined);
+
+    if (nextDetection.confidence === 'high' && nextDetection.format) {
+      setSchemaFormat(nextDetection.format);
+      const supportedMessages = supportedMessageFormatsForSchema(nextDetection.format);
+      if (!supportedMessages.includes(messageFormat)) {
+        setMessageFormat(supportedMessages[0]);
+      }
+    }
   };
 
   const handleSchemaFormatChange = (nextFormat: SchemaFormat) => {
+    setManualSchemaFormat(true);
     setSchemaFormat(nextFormat);
     const supportedMessages = supportedMessageFormatsForSchema(nextFormat);
     if (!supportedMessages.includes(messageFormat)) {
       setMessageFormat(supportedMessages[0]);
     }
   };
+
+  const handleMessageFormatChange = (nextFormat: MessageFormat) => {
+    setMessageFormat(nextFormat);
+  };
+
+  const handleSummaryNodeSelect = (node: SchemaSummaryNode) => {
+    if (!node.sourceRange) {
+      return;
+    }
+
+    setActiveIssueId(undefined);
+    setSummaryRange(node.sourceRange);
+    setSchemaTabId('editor');
+  };
+
+  const handleIssueSelect = (issue: ValidationIssue) => {
+    setSummaryRange(undefined);
+    setActiveIssueId(issue.id);
+  };
+
+  const detectionLabel = manualSchemaFormat
+    ? `Manual: ${formatLabel(schemaFormat)}`
+    : schemaDetection.format
+      ? `Detected: ${formatLabel(schemaDetection.format)}`
+      : 'No schema detected';
+  const schemaActiveRange = activeIssue?.schemaRange ?? summaryRange;
 
   return (
     <main className="app-shell">
@@ -97,7 +142,6 @@ export function ValidatorWorkbench() {
         </div>
 
         <div className="topbar-actions">
-          <SampleLibrary activeSampleId={activeSampleId} onSampleSelect={loadSample} />
           <label className="toggle-control">
             <input type="checkbox" checked={autoValidate} onChange={(event) => setAutoValidate(event.target.checked)} />
             <Zap aria-hidden="true" size={15} />
@@ -115,10 +159,18 @@ export function ValidatorWorkbench() {
           schemaFormat={schemaFormat}
           messageFormat={messageFormat}
           onSchemaFormatChange={handleSchemaFormatChange}
-          onMessageFormatChange={setMessageFormat}
+          onMessageFormatChange={handleMessageFormatChange}
         />
-        <div className={`pair-status ${supportedPair ? 'is-supported' : 'is-unsupported'}`}>
-          {supportedPair ? 'Supported pair' : 'Unsupported pair'}
+        <div className="status-group">
+          <div
+            className={`detection-pill ${schemaDetection.format ? 'is-detected' : 'is-empty'}`}
+            title={schemaDetection.reason}
+          >
+            {detectionLabel}
+          </div>
+          <div className={`pair-status ${supportedPair ? 'is-supported' : 'is-unsupported'}`}>
+            {supportedPair ? 'Supported pair' : 'Unsupported pair'}
+          </div>
         </div>
       </section>
 
@@ -129,8 +181,19 @@ export function ValidatorWorkbench() {
             language={languageForSchema(schemaFormat)}
             value={schemaText}
             issues={schemaIssues}
-            activeRange={activeIssue?.schemaRange}
-            onChange={setSchemaText}
+            activeRange={schemaActiveRange}
+            onChange={handleSchemaTextChange}
+            headingMeta={<span className="pane-meta">{schemaSummary.stats.nodes} summary nodes</span>}
+            tabs={[
+              { id: 'editor', label: 'Editor' },
+              {
+                id: 'summary',
+                label: 'Summary',
+                content: <SchemaSummaryTree summary={schemaSummary} onNodeSelect={handleSummaryNodeSelect} />,
+              },
+            ]}
+            activeTabId={schemaTabId}
+            onTabChange={setSchemaTabId}
           />
           <EditorPane
             title="Message"
@@ -141,11 +204,7 @@ export function ValidatorWorkbench() {
             onChange={setMessageText}
           />
         </div>
-        <DiagnosticsPanel
-          result={result}
-          activeIssueId={activeIssueId}
-          onIssueSelect={(issue: ValidationIssue) => setActiveIssueId(issue.id)}
-        />
+        <DiagnosticsPanel result={result} activeIssueId={activeIssueId} onIssueSelect={handleIssueSelect} />
       </section>
     </main>
   );

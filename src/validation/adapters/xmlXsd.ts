@@ -493,7 +493,8 @@ const isXmlObject = (value: unknown): value is Record<string, unknown> =>
 const hasXmlChildElements = (value: unknown) =>
   isXmlObject(value) && Object.keys(value).some((key) => !key.startsWith('@_') && key !== '#text');
 
-const hasXmlAttributes = (value: unknown) => isXmlObject(value) && Object.keys(value).some((key) => key.startsWith('@_'));
+const hasXmlAttributes = (value: unknown) =>
+  isXmlObject(value) && Object.keys(value).some((key) => key.startsWith('@_'));
 
 const hasXmlContent = (value: unknown, type: string) => {
   if (xmlTextValue(value).trim() !== '') {

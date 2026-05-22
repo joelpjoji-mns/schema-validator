@@ -1,8 +1,14 @@
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { FileUp } from 'lucide-react';
 import type { editor, IRange } from 'monaco-editor';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { TextRange, ValidationIssue } from '../validation/types';
+
+export interface EditorPaneTab {
+  id: string;
+  label: string;
+  content?: ReactNode;
+}
 
 interface EditorPaneProps {
   title: string;
@@ -11,13 +17,29 @@ interface EditorPaneProps {
   issues: ValidationIssue[];
   activeRange?: TextRange;
   onChange: (value: string) => void;
+  headingMeta?: ReactNode;
+  tabs?: EditorPaneTab[];
+  activeTabId?: string;
+  onTabChange?: (tabId: string) => void;
 }
 
-export function EditorPane({ title, language, value, issues, activeRange, onChange }: EditorPaneProps) {
+export function EditorPane({
+  title,
+  language,
+  value,
+  issues,
+  activeRange,
+  onChange,
+  headingMeta,
+  tabs,
+  activeTabId = 'editor',
+  onTabChange,
+}: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
   const decorationsRef = useRef<editor.IEditorDecorationsCollection | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const activeTab = tabs?.find((tab) => tab.id === activeTabId);
 
   const handleMount: OnMount = (mountedEditor, monaco) => {
     editorRef.current = mountedEditor;
@@ -90,16 +112,19 @@ export function EditorPane({ title, language, value, issues, activeRange, onChan
               ? 'No highlighted issues'
               : `${issues.length} highlighted issue${issues.length === 1 ? '' : 's'}`}
           </p>
+          {headingMeta}
         </div>
-        <button
-          type="button"
-          className="icon-button"
-          title={`Upload ${title.toLowerCase()}`}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <FileUp aria-hidden="true" size={17} />
-          <span className="sr-only">Upload {title}</span>
-        </button>
+        <div className="pane-heading-actions">
+          <button
+            type="button"
+            className="icon-button"
+            title={`Upload ${title.toLowerCase()}`}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <FileUp aria-hidden="true" size={17} />
+            <span className="sr-only">Upload {title}</span>
+          </button>
+        </div>
         <input
           ref={fileInputRef}
           className="sr-only"
@@ -114,29 +139,49 @@ export function EditorPane({ title, language, value, issues, activeRange, onChan
           }}
         />
       </div>
-      <div className="editor-frame">
-        <Editor
-          height="100%"
-          language={language}
-          value={value}
-          theme="vs"
-          onMount={handleMount}
-          onChange={(nextValue) => onChange(nextValue ?? '')}
-          options={{
-            automaticLayout: true,
-            minimap: { enabled: true },
-            scrollBeyondLastLine: false,
-            fontSize: 13,
-            lineNumbersMinChars: 3,
-            folding: true,
-            wordWrap: 'on',
-            wrappingIndent: 'same',
-            renderLineHighlight: 'gutter',
-            fixedOverflowWidgets: true,
-            tabSize: 2,
-          }}
-        />
-      </div>
+      {tabs ? (
+        <div className="pane-tabs" role="tablist" aria-label={`${title} views`}>
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTabId === tab.id}
+              className={`pane-tab ${activeTabId === tab.id ? 'is-active' : ''}`}
+              onClick={() => onTabChange?.(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {activeTabId === 'editor' ? (
+        <div className="editor-frame">
+          <Editor
+            height="100%"
+            language={language}
+            value={value}
+            theme="vs"
+            onMount={handleMount}
+            onChange={(nextValue) => onChange(nextValue ?? '')}
+            options={{
+              automaticLayout: true,
+              minimap: { enabled: true },
+              scrollBeyondLastLine: false,
+              fontSize: 13,
+              lineNumbersMinChars: 3,
+              folding: true,
+              wordWrap: 'on',
+              wrappingIndent: 'same',
+              renderLineHighlight: 'gutter',
+              fixedOverflowWidgets: true,
+              tabSize: 2,
+            }}
+          />
+        </div>
+      ) : (
+        <div className="summary-frame">{activeTab?.content}</div>
+      )}
     </section>
   );
 }

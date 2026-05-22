@@ -2,6 +2,16 @@
 
 This app is a static, browser-only validation workbench. It is strongest for JSON-like schema validation and intentionally lighter for XSD because full W3C XSD validation requires a dedicated XSD engine, usually WASM or a backend service.
 
+All schema formats can be inspected in the Schema Summary tab. The summary is a best-effort hierarchy view for human scanning; validation diagnostics remain the source of truth for pass/fail behavior.
+
+## Product Workflow
+
+- Editors start empty, with no bundled fixture selected in the product UI.
+- Validation reruns automatically after schema or message edits when Auto validate is enabled.
+- Schema format detection can switch the schema selector for high-confidence signatures such as XSD, GraphQL SDL, Protobuf, OpenAPI, Avro, table schemas, and key-value rules.
+- Manual schema format selection is preserved until the schema text changes again.
+- The Schema Summary tab can toggle ordering, required fields, optional fields, data types, limits, descriptions, and warnings.
+
 ## Format Coverage
 
 | Schema format    | Message format     | Support level | What is covered                                                                                                                                                                                    | Known limits                                                                                                                                                                 |
@@ -16,6 +26,19 @@ This app is a static, browser-only validation workbench. It is strongest for JSO
 | Avro             | JSON               | Moderate      | Records, arrays, maps, unions, enums, nullable unions, missing/extra fields                                                                                                                        | Focused in-app validator, not a full Avro spec implementation                                                                                                                |
 | CSV table schema | CSV                | Basic         | Required columns, required cells, basic string/integer/number/boolean/date checks, quote-aware cell highlighting                                                                                   | No cross-row constraints, uniqueness, joins, or advanced CSV dialect configuration                                                                                           |
 | Key-value rules  | INI/ENV style text | Basic         | Required keys, duplicate warnings, empty values, types, enums, safe regex pattern validation                                                                                                       | INI sections are ignored; multiline and repeated-array values are not modeled                                                                                                |
+
+## Summary Coverage
+
+| Schema format    | Summary coverage                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| JSON Schema      | Properties, required flags, items, composition keywords, definitions, refs, enums, limits, formats   |
+| XSD              | Top-level element, child elements, attributes, min/max occurs, primitive/custom types, simple facets |
+| OpenAPI 3.x      | First discovered request/response/component schema with local ref resolution                         |
+| GraphQL SDL      | Types, input types, interfaces, fields, arguments, enums, unions, non-null and list markers          |
+| Protobuf         | Messages, fields, field numbers, repeated fields, maps, oneof markers, enums                         |
+| Avro             | Records, fields, arrays, maps, unions, enums, defaults, logical types                                |
+| CSV table schema | Columns, required flags, declared types, limits                                                      |
+| Key-value rules  | Keys, required flags, declared types, enum/pattern/limit rules                                       |
 
 ## XSD Note
 

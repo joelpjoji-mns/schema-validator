@@ -2,6 +2,8 @@
 
 A local-first validation workbench for comparing schemas against messages/files with precise diagnostics, editor highlights, and format-specific explanations.
 
+Paste or upload a schema and message, and the workbench revalidates as either editor changes. The schema editor also detects common schema formats automatically and includes a Summary tab that renders a tree-style hierarchy with ordering, required/optional fields, data types, limits, descriptions, and warnings.
+
 ## Scripts
 
 - `npm run dev` starts the Vite app.
@@ -27,5 +29,7 @@ Pushing to `main` runs `.github/workflows/deploy-pages.yml`, builds the static a
 ## Supported adapters
 
 The app ships with focused support for JSON Schema, YAML through JSON Schema, XML with an XSD-lite rule mapper, OpenAPI examples, GraphQL SDL/operations, Protobuf JSON messages, Avro records, CSV table schemas, TOML through JSON Schema, and key-value rule schemas.
+
+Schema auto-detection currently recognizes XSD, JSON Schema, OpenAPI, GraphQL SDL, Protobuf, Avro, CSV table schemas, and key-value rule schemas. You can still select formats manually when a schema is ambiguous.
 
 See [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) for the exact coverage level and known limits of each adapter.
