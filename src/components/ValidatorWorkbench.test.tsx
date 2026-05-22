@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { validateRequest } from '../validation/registry';
+import type { ValidationResult } from '../validation/types';
+import { EditorPane } from './EditorPane';
 import { ValidatorWorkbench } from './ValidatorWorkbench';
 
 vi.mock('@monaco-editor/react', () => ({
@@ -8,6 +11,24 @@ vi.mock('@monaco-editor/react', () => ({
     <textarea aria-label={`mock-editor-${language}`} value={value} onChange={(event) => onChange(event.target.value)} />
   ),
 }));
+
+vi.mock('../validation/registry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../validation/registry')>();
+  return {
+    ...actual,
+    validateRequest: vi.fn(actual.validateRequest),
+  };
+});
+
+const mockedValidateRequest = vi.mocked(validateRequest);
+
+beforeEach(() => {
+  mockedValidateRequest.mockReset();
+  mockedValidateRequest.mockImplementation(async (request) => {
+    const actual = await vi.importActual<typeof import('../validation/registry')>('../validation/registry');
+    return actual.validateRequest(request);
+  });
+});
 
 describe('ValidatorWorkbench', () => {
   it('starts without fixture text and waits for input', () => {
@@ -80,4 +101,70 @@ describe('ValidatorWorkbench', () => {
 
     await waitFor(() => expect(screen.getByText(/Missing required field: name/i)).toBeInTheDocument());
   });
+
+  it('keeps the newest validation result when an older run finishes late', async () => {
+    const firstRun = deferred<ValidationResult>();
+    const secondRun = deferred<ValidationResult>();
+    mockedValidateRequest.mockImplementationOnce(() => firstRun.promise).mockImplementationOnce(() => secondRun.promise);
+
+    render(<ValidatorWorkbench />);
+
+    const [schemaEditor, messageEditor] = screen.getAllByRole('textbox');
+    fireEvent.change(schemaEditor, { target: { value: '{"type":"object"}' } });
+    fireEvent.change(messageEditor, { target: { value: '{"name":"Joel"}' } });
+
+    await waitFor(() => expect(mockedValidateRequest).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(messageEditor, { target: { value: '{}' } });
+    await waitFor(() => expect(mockedValidateRequest).toHaveBeenCalledTimes(2));
+
+    secondRun.resolve({
+      ok: false,
+      adapterId: 'mock',
+      summary: '1 validation issue found.',
+      durationMs: 1,
+      issues: [
+        {
+          id: 'newer-required-name',
+          severity: 'error',
+          code: 'required',
+          title: 'Missing required field: name',
+          message: 'The latest message is missing name.',
+        },
+      ],
+    });
+
+    await waitFor(() => expect(screen.getByText(/Missing required field: name/i)).toBeInTheDocument());
+
+    firstRun.resolve({ ok: true, adapterId: 'mock', summary: 'Validation passed.', durationMs: 1, issues: [] });
+
+    await waitFor(() => expect(screen.getByText(/Missing required field: name/i)).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: /validation passed/i })).not.toBeInTheDocument();
+  });
+
+  it('shows a compact upload error when a selected file cannot be read', async () => {
+    const { container } = render(
+      <EditorPane title="Schema" language="xml" value="" issues={[]} onChange={vi.fn()} />,
+    );
+    const input = container.querySelector('input[type="file"]');
+    const unreadableFile = {
+      name: 'broken.xsd',
+      text: vi.fn().mockRejectedValue(new Error('read failed')),
+    } as unknown as File;
+
+    fireEvent.change(input as HTMLInputElement, { target: { files: [unreadableFile] } });
+
+    expect(await screen.findByText('Could not read broken.xsd.')).toBeInTheDocument();
+  });
 });
+
+const deferred = <TValue,>() => {
+  let resolve!: (value: TValue) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<TValue>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+};

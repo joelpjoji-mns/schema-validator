@@ -313,6 +313,15 @@ select {
   gap: 8px;
 }
 
+.pane-upload-error {
+  border-bottom: 1px solid #fecdd3;
+  padding: 7px 12px;
+  color: #9f1239;
+  background: #fff1f2;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .pane-tabs {
   display: flex;
   gap: 6px;

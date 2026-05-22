@@ -1,5 +1,5 @@
 import { Play, ShieldCheck, Zap } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { introspectSchema, type SchemaSummaryNode } from '../validation/introspection';
 import { isSupportedFormatPair, supportedMessageFormatsForSchema, validateRequest } from '../validation/registry';
 import { detectSchemaFormat } from '../validation/schemaDetection';
@@ -30,6 +30,7 @@ export function ValidatorWorkbench() {
   const [schemaTabId, setSchemaTabId] = useState('editor');
   const [manualSchemaFormat, setManualSchemaFormat] = useState(false);
   const [summaryRange, setSummaryRange] = useState<TextRange>();
+  const validationRunId = useRef(0);
 
   const supportedPair = isSupportedFormatPair(schemaFormat, messageFormat);
   const activeIssue = result?.issues.find((issue) => issue.id === activeIssueId);
@@ -48,6 +49,9 @@ export function ValidatorWorkbench() {
   );
 
   const runValidation = useCallback(async () => {
+    const runId = validationRunId.current + 1;
+    validationRunId.current = runId;
+
     if (!schemaText.trim() && !messageText.trim()) {
       setResult(null);
       setActiveIssueId(undefined);
@@ -57,10 +61,15 @@ export function ValidatorWorkbench() {
     setIsValidating(true);
     try {
       const nextResult = await validateRequest({ schemaText, messageText, schemaFormat, messageFormat });
+      if (runId !== validationRunId.current) {
+        return;
+      }
       setResult(nextResult);
       setActiveIssueId(nextResult.issues[0]?.id);
     } finally {
-      setIsValidating(false);
+      if (runId === validationRunId.current) {
+        setIsValidating(false);
+      }
     }
   }, [messageFormat, messageText, schemaFormat, schemaText]);
 

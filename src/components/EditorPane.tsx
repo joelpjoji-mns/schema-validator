@@ -1,7 +1,7 @@
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { FileUp } from 'lucide-react';
 import type { editor, IRange } from 'monaco-editor';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { TextRange, ValidationIssue } from '../validation/types';
 
 export interface EditorPaneTab {
@@ -39,6 +39,7 @@ export function EditorPane({
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
   const decorationsRef = useRef<editor.IEditorDecorationsCollection | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadError, setUploadError] = useState<string>();
   const activeTab = tabs?.find((tab) => tab.id === activeTabId);
 
   const handleMount: OnMount = (mountedEditor, monaco) => {
@@ -130,15 +131,23 @@ export function EditorPane({
           className="sr-only"
           type="file"
           onChange={(event) => {
+            const input = event.currentTarget;
             const file = event.target.files?.[0];
             if (!file) {
               return;
             }
-            void file.text().then(onChange);
-            event.currentTarget.value = '';
+            setUploadError(undefined);
+            void file
+              .text()
+              .then(onChange)
+              .catch(() => setUploadError(`Could not read ${file.name}.`))
+              .finally(() => {
+                input.value = '';
+              });
           }}
         />
       </div>
+      {uploadError ? <div className="pane-upload-error">{uploadError}</div> : null}
       {tabs ? (
         <div className="pane-tabs" role="tablist" aria-label={`${title} views`}>
           {tabs.map((tab) => (
