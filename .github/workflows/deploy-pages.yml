@@ -47,8 +47,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch --orphan gh-pages
-          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -R /tmp/schema-validator-pages/. .
-          git add .
+          git add -A
           git commit -m "Deploy static site"
           git push --force origin gh-pages
