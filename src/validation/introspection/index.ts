@@ -698,22 +698,20 @@ const graphqlTypeNode = (type: GraphQLNamedType, schemaText: string, order: numb
   }
 
   if (isEnumType(type)) {
-    const children = type
-      .getValues()
-      .map((value, index) =>
-        node({
-          id: `${type.name}.${value.name}`,
-          name: value.name,
-          kind: 'enum',
-          dataType: 'enum',
-          required: false,
-          order: index + 1,
-          description: value.description ?? undefined,
-          constraints: value.deprecationReason ? [constraint('deprecated', 'deprecated', value.deprecationReason)] : [],
-          children: [],
-          sourceRange: findTextRange(schemaText, value.name),
-        }),
-      );
+    const children = type.getValues().map((value, index) =>
+      node({
+        id: `${type.name}.${value.name}`,
+        name: value.name,
+        kind: 'enum',
+        dataType: 'enum',
+        required: false,
+        order: index + 1,
+        description: value.description ?? undefined,
+        constraints: value.deprecationReason ? [constraint('deprecated', 'deprecated', value.deprecationReason)] : [],
+        children: [],
+        sourceRange: findTextRange(schemaText, value.name),
+      }),
+    );
     return node({
       id: type.name,
       name: type.name,
@@ -730,21 +728,19 @@ const graphqlTypeNode = (type: GraphQLNamedType, schemaText: string, order: numb
 
   const maybeUnion = type as GraphQLNamedType & { getTypes?: () => GraphQLNamedType[] };
   if (typeof maybeUnion.getTypes === 'function') {
-    const children = maybeUnion
-      .getTypes()
-      .map((childType, index) =>
-        node({
-          id: `${maybeUnion.name}.${childType.name}`,
-          name: childType.name,
-          kind: 'union',
-          dataType: 'object',
-          required: false,
-          order: index + 1,
-          constraints: [],
-          children: [],
-          sourceRange: findTextRange(schemaText, childType.name),
-        }),
-      );
+    const children = maybeUnion.getTypes().map((childType, index) =>
+      node({
+        id: `${maybeUnion.name}.${childType.name}`,
+        name: childType.name,
+        kind: 'union',
+        dataType: 'object',
+        required: false,
+        order: index + 1,
+        constraints: [],
+        children: [],
+        sourceRange: findTextRange(schemaText, childType.name),
+      }),
+    );
     return node({
       id: type.name,
       name: type.name,
@@ -1072,7 +1068,7 @@ const xsdChildElements = (block: string, parentStart: number): XsdElementMatch[]
     const selfClosing = /\/\s*>$/.test(match[0]);
     const end = selfClosing
       ? match.index + match[0].length
-      : findClosingTagOffset(block, match.index, 'element') ?? match.index + match[0].length;
+      : (findClosingTagOffset(block, match.index, 'element') ?? match.index + match[0].length);
     children.push({
       name,
       type: xmlAttribute(match[1], 'type'),
