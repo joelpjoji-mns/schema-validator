@@ -1,4 +1,6 @@
-import Ajv, { type AnySchema, type ErrorObject } from 'ajv';
+import AjvDraft7, { type AnySchema, type ErrorObject } from 'ajv';
+import Ajv2019 from 'ajv/dist/2019';
+import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import { parseMessageDocument, parseSchemaDocument, type SourceDocument } from '../structuredParsers';
 import {
@@ -72,17 +74,9 @@ export const validateStructuredWithJsonSchema = (
   options: JsonSchemaValidationOptions,
   startedAt = performance.now(),
 ): ValidationResult => {
-  const ajv = new Ajv({
-    allErrors: true,
-    strict: false,
-    validateSchema: false,
-    allowUnionTypes: true,
-    messages: true,
-    verbose: true,
-  });
-  addFormats(ajv);
+  const ajv = createAjv(options.schemaData);
 
-  let validate: ReturnType<Ajv['compile']>;
+  let validate: ReturnType<AjvDraft7['compile']>;
   try {
     validate = ajv.compile(options.schemaData as AnySchema);
   } catch (error) {
@@ -113,6 +107,58 @@ export const validateStructuredWithJsonSchema = (
       );
 
   return resultFromIssues(options.adapterLabel, options.adapterId, startedAt, issues);
+};
+
+const createAjv = (schemaData: unknown): AjvDraft7 => {
+  const ajvOptions = {
+    allErrors: true,
+    strict: false,
+    validateSchema: false,
+    allowUnionTypes: true,
+    messages: true,
+    verbose: true,
+  };
+  const schemaUri = schemaData && typeof schemaData === 'object' && '$schema' in schemaData
+    ? String((schemaData as { $schema?: unknown }).$schema ?? '').toLowerCase()
+    : '';
+  const AjvClass = schemaUri.includes('2020-12')
+    ? Ajv2020
+    : schemaUri.includes('2019-09') || usesModernJsonSchemaKeywords(schemaData)
+      ? Ajv2019
+      : AjvDraft7;
+  const ajv = new AjvClass(ajvOptions) as unknown as AjvDraft7;
+  addFormats(ajv);
+
+  return ajv;
+};
+
+const modernJsonSchemaKeywords = new Set([
+  'dependentRequired',
+  'dependentSchemas',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+  'minContains',
+  'maxContains',
+  'prefixItems',
+]);
+
+const usesModernJsonSchemaKeywords = (value: unknown, seen = new WeakSet<object>(), depth = 0): boolean => {
+  if (!value || typeof value !== 'object' || depth > 100) {
+    return false;
+  }
+
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.some((item) => usesModernJsonSchemaKeywords(item, seen, depth + 1));
+  }
+
+  return Object.entries(value).some(
+    ([key, child]) => modernJsonSchemaKeywords.has(key) || usesModernJsonSchemaKeywords(child, seen, depth + 1),
+  );
 };
 
 const mapAjvError = (
@@ -292,6 +338,135 @@ const mapAjvError = (
     });
   }
 
+  if (['oneOf', 'anyOf', 'allOf'].includes(error.keyword)) {
+    const mode = error.keyword === 'oneOf' ? 'exactly one' : error.keyword === 'anyOf' ? 'at least one' : 'all';
+    const passingSchemas = (error.params as { passingSchemas?: unknown }).passingSchemas;
+
+    return makeIssue({
+      ...base,
+      code: `${error.keyword}-mismatch`,
+      title: `Value does not satisfy ${error.keyword}`,
+      message: `The highlighted value must match ${mode} of the schema options, but it does not satisfy the ${error.keyword} rule.`,
+      expected: `${error.keyword}: ${mode} matching schema option${mode === 'all' ? 's' : ''}`,
+      actual: Array.isArray(passingSchemas) ? `${passingSchemas.length} matching option(s)` : JSON.stringify(value),
+      messageRange,
+      hint: 'Open the linked schema rule and compare the highlighted value against each option.',
+    });
+  }
+
+  if (error.keyword === 'not') {
+    return makeIssue({
+      ...base,
+      code: 'not-schema-match',
+      title: 'Value matches a forbidden schema',
+      message: 'The highlighted value matches a schema listed under not, so it is explicitly disallowed.',
+      expected: 'A value that does not match the forbidden schema',
+      actual: JSON.stringify(value),
+      messageRange,
+    });
+  }
+
+  if (['if', 'then', 'else'].includes(error.keyword)) {
+    const failingKeyword = String((error.params as { failingKeyword?: unknown }).failingKeyword ?? error.keyword);
+
+    return makeIssue({
+      ...base,
+      code: `conditional-${failingKeyword}`,
+      title: 'Conditional schema rule failed',
+      message: `The highlighted value triggered a conditional schema, but the ${failingKeyword} branch failed.`,
+      expected: `${failingKeyword} branch must validate`,
+      actual: JSON.stringify(value),
+      messageRange,
+    });
+  }
+
+  if (error.keyword === 'dependentRequired') {
+    const property = String((error.params as { property?: unknown }).property ?? 'the triggering property');
+    const missingProperty = String((error.params as { missingProperty?: unknown }).missingProperty ?? 'a dependent property');
+
+    return makeIssue({
+      ...base,
+      code: 'dependent-required-missing',
+      title: `Missing dependent field: ${missingProperty}`,
+      message: `Because "${property}" is present, the schema also requires "${missingProperty}".`,
+      expected: `Property "${missingProperty}" must exist when "${property}" exists.`,
+      actual: 'Missing dependent field',
+      messageRange: payloadDocument.rangeForPath(instanceSegments) ?? payloadDocument.rootRange,
+      hint: `Add "${missingProperty}" or remove "${property}" from the highlighted object.`,
+    });
+  }
+
+  if (error.keyword === 'propertyNames') {
+    const propertyName = String((error.params as { propertyName?: unknown }).propertyName ?? 'a property name');
+
+    return makeIssue({
+      ...base,
+      code: 'property-name-invalid',
+      title: `Property name is invalid: ${propertyName}`,
+      message: `The property name "${propertyName}" does not satisfy the schema's propertyNames rule.`,
+      expected: 'Property name rule must validate',
+      actual: propertyName,
+      messageRange: payloadDocument.rangeForPath([...instanceSegments, propertyName]) ?? messageRange,
+    });
+  }
+
+  if (['contains', 'minContains', 'maxContains'].includes(error.keyword)) {
+    const limit = (error.params as { minContains?: unknown; maxContains?: unknown }).minContains ??
+      (error.params as { maxContains?: unknown }).maxContains;
+
+    return makeIssue({
+      ...base,
+      code: `array-${error.keyword}`,
+      title: 'Array does not contain the required matching items',
+      message: `The highlighted array violates the ${error.keyword} rule${limit === undefined ? '' : ` (${limit})`}.`,
+      expected: error.keyword,
+      actual: Array.isArray(value) ? `${value.length} item(s)` : describeActual(value),
+      messageRange,
+    });
+  }
+
+  if (error.keyword === 'uniqueItems') {
+    const duplicateIndexes = error.params as { i?: unknown; j?: unknown };
+
+    return makeIssue({
+      ...base,
+      code: 'array-duplicate-items',
+      title: 'Array items must be unique',
+      message: `The highlighted array contains duplicate items${duplicateIndexes.i !== undefined && duplicateIndexes.j !== undefined ? ` at indexes ${duplicateIndexes.i} and ${duplicateIndexes.j}` : ''}.`,
+      expected: 'Every array item must be unique',
+      actual: 'Duplicate item found',
+      messageRange,
+    });
+  }
+
+  if (error.keyword === 'multipleOf') {
+    const multipleOf = String((error.params as { multipleOf?: unknown }).multipleOf ?? 'the divisor');
+
+    return makeIssue({
+      ...base,
+      code: 'number-multiple-of',
+      title: 'Number is not a valid multiple',
+      message: `The highlighted number must be a multiple of ${multipleOf}.`,
+      expected: `multipleOf: ${multipleOf}`,
+      actual: JSON.stringify(value),
+      messageRange,
+    });
+  }
+
+  if (['unevaluatedProperties', 'unevaluatedItems'].includes(error.keyword)) {
+    const unevaluatedProperty = String((error.params as { unevaluatedProperty?: unknown }).unevaluatedProperty ?? 'an unevaluated value');
+
+    return makeIssue({
+      ...base,
+      code: `schema-${error.keyword}`,
+      title: 'Value is not covered by the evaluated schema rules',
+      message: `The highlighted value is rejected by ${error.keyword}${unevaluatedProperty ? ` (${unevaluatedProperty})` : ''}.`,
+      expected: `${error.keyword} must allow the value`,
+      actual: unevaluatedProperty,
+      messageRange,
+    });
+  }
+
   return makeIssue({
     ...base,
     code: `schema-rule-${error.keyword || index}`,
@@ -299,7 +474,7 @@ const mapAjvError = (
     message: error.message
       ? `The highlighted value ${error.message}.`
       : 'A schema rule failed for the highlighted value.',
-    expected: error.schemaPath,
+    expected: error.message ?? `${error.keyword} rule`,
     actual: JSON.stringify(value),
     messageRange,
     hint: 'Check the linked schema rule and the highlighted message value together.',

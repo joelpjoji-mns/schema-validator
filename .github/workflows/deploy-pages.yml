@@ -34,6 +34,8 @@ jobs:
           npm run lint
           npm run typecheck
           npm run test
+          npx playwright install --with-deps chromium
+          npm run test:e2e
 
       - name: Build static output
         run: npm run build:static

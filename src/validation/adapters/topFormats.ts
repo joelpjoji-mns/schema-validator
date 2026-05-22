@@ -29,6 +29,10 @@ import {
 import type { TextRange, ValidationIssue, ValidationRequest, ValidationResult, ValidatorAdapter } from '../types';
 import { validateStructuredWithJsonSchema } from './jsonSchema';
 
+const MAX_OPENAPI_SEARCH_DEPTH = 50;
+const MAX_OPENAPI_REF_DEPTH = 50;
+const MAX_OPENAPI_NORMALIZE_DEPTH = 100;
+
 export const openApiAdapter: ValidatorAdapter = {
   id: 'openapi',
   label: 'OpenAPI Example',
@@ -102,8 +106,23 @@ const validateOpenApiExample = (request: ValidationRequest): ValidationResult =>
     ]);
   }
 
-  const resolved = resolveLocalRef(schemaCandidate.schema, schema.document.data, schemaCandidate.path);
-  const normalizedSchema = normalizeOpenApiSchema(resolved.schema);
+  let resolved: OpenApiSchemaCandidate;
+  let normalizedSchema: unknown;
+  try {
+    resolved = resolveLocalRef(schemaCandidate.schema, schema.document.data, schemaCandidate.path);
+    normalizedSchema = normalizeOpenApiSchema(resolved.schema);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The OpenAPI schema could not be safely resolved.';
+    return resultFromIssues('OpenAPI Example', 'openapi', start, [
+      makeIssue({
+        code: 'openapi-schema-resolution',
+        title: 'OpenAPI schema cannot be resolved safely',
+        message,
+        schemaRange: schema.document.rootRange,
+        hint: 'Check circular $ref values or extremely deep schema nesting.',
+      }),
+    ]);
+  }
 
   return validateStructuredWithJsonSchema(
     {
@@ -642,7 +661,7 @@ const validateCsvTableSchema = (request: ValidationRequest): ValidationResult =>
         code: 'csv-parse-error',
         title: 'CSV cannot parse cleanly',
         message: error.message,
-        messageRange: rangeFromLineColumn(request.messageText, (error.row ?? 0) + 2, 1),
+        messageRange: rangeFromLineColumn(request.messageText, typeof error.row === 'number' ? error.row + 2 : 1, 1),
       }),
     );
   });
@@ -788,18 +807,39 @@ const validateKeyValueRules = (request: ValidationRequest): ValidationResult => 
       );
     }
 
-    if (rule.pattern && !new RegExp(rule.pattern).test(entry.value)) {
-      issues.push(
-        makeIssue({
-          code: 'key-value-pattern',
-          title: `Pattern mismatch: ${key}`,
-          message: `"${key}" must match /${rule.pattern}/.`,
-          expected: `/${rule.pattern}/`,
-          actual: entry.value,
-          schemaRange: schema.document.rangeForKey(key) ?? schema.document.rootRange,
-          messageRange: entry.range,
-        }),
-      );
+    if (rule.pattern) {
+      let regex: RegExp;
+      try {
+        regex = new RegExp(rule.pattern);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'The pattern is not a valid regular expression.';
+        issues.push(
+          makeIssue({
+            code: 'key-value-pattern-invalid',
+            title: `Invalid pattern for key: ${key}`,
+            message: `The rule pattern /${rule.pattern}/ cannot be compiled: ${message}`,
+            expected: 'Valid JavaScript regular expression',
+            actual: rule.pattern,
+            schemaRange: schema.document.rangeForKey(key) ?? schema.document.rootRange,
+            messageRange: entry.range,
+          }),
+        );
+        continue;
+      }
+
+      if (!regex.test(entry.value)) {
+        issues.push(
+          makeIssue({
+            code: 'key-value-pattern',
+            title: `Pattern mismatch: ${key}`,
+            message: `"${key}" must match /${rule.pattern}/.`,
+            expected: `/${rule.pattern}/`,
+            actual: entry.value,
+            schemaRange: schema.document.rangeForKey(key) ?? schema.document.rootRange,
+            messageRange: entry.range,
+          }),
+        );
+      }
     }
   }
 
@@ -811,13 +851,38 @@ interface OpenApiSchemaCandidate {
   path: string[];
 }
 
+interface OpenApiQueueItem extends OpenApiSchemaCandidate {
+  depth: number;
+}
+
 const findOpenApiSchema = (root: unknown): OpenApiSchemaCandidate | undefined => {
-  const queue: OpenApiSchemaCandidate[] = [{ schema: root, path: [] }];
+  const queue: OpenApiQueueItem[] = [{ schema: root, path: [], depth: 0 }];
+  const visited = new WeakSet<object>();
   let fallback: OpenApiSchemaCandidate | undefined;
 
   while (queue.length > 0) {
     const current = queue.shift();
-    if (!current || !isRecord(current.schema)) {
+    if (!current || current.depth > MAX_OPENAPI_SEARCH_DEPTH) {
+      continue;
+    }
+
+    if (typeof current.schema === 'object' && current.schema !== null) {
+      if (visited.has(current.schema)) {
+        continue;
+      }
+      visited.add(current.schema);
+    }
+
+    if (Array.isArray(current.schema)) {
+      current.schema.forEach((value, index) => {
+        if (isRecord(value) || Array.isArray(value)) {
+          queue.push({ schema: value, path: [...current.path, String(index)], depth: current.depth + 1 });
+        }
+      });
+      continue;
+    }
+
+    if (!isRecord(current.schema)) {
       continue;
     }
 
@@ -831,7 +896,7 @@ const findOpenApiSchema = (root: unknown): OpenApiSchemaCandidate | undefined =>
 
     for (const [key, value] of Object.entries(current.schema)) {
       if (isRecord(value) || Array.isArray(value)) {
-        queue.push({ schema: value, path: [...current.path, key] });
+        queue.push({ schema: value, path: [...current.path, key], depth: current.depth + 1 });
       }
     }
   }
@@ -839,12 +904,28 @@ const findOpenApiSchema = (root: unknown): OpenApiSchemaCandidate | undefined =>
   return fallback;
 };
 
-const resolveLocalRef = (schema: unknown, root: unknown, path: string[]): OpenApiSchemaCandidate => {
+const resolveLocalRef = (
+  schema: unknown,
+  root: unknown,
+  path: string[],
+  visited = new Set<string>(),
+  depth = 0,
+): OpenApiSchemaCandidate => {
+  if (depth > MAX_OPENAPI_REF_DEPTH) {
+    throw new Error('OpenAPI $ref resolution exceeded the maximum safe depth.');
+  }
+
   if (isRecord(schema) && typeof schema.$ref === 'string' && schema.$ref.startsWith('#')) {
     const refPath = pointerToSegments(schema.$ref);
+    const refKey = segmentsToPointer(refPath);
+    if (visited.has(refKey)) {
+      throw new Error(`Circular OpenAPI $ref detected at ${refKey}.`);
+    }
+
     const resolved = getValueAtPath(root, refPath);
     if (resolved !== undefined) {
-      return { schema: resolved, path: refPath };
+      visited.add(refKey);
+      return resolveLocalRef(resolved, root, refPath, visited, depth + 1);
     }
   }
 
@@ -860,9 +941,20 @@ const looksLikeJsonSchema = (value: Record<string, unknown>) =>
   'oneOf' in value ||
   'anyOf' in value;
 
-const normalizeOpenApiSchema = (schema: unknown): unknown => {
+const normalizeOpenApiSchema = (schema: unknown, depth = 0, visited = new WeakSet<object>()): unknown => {
+  if (depth > MAX_OPENAPI_NORMALIZE_DEPTH) {
+    throw new Error('OpenAPI schema normalization exceeded the maximum safe depth.');
+  }
+
+  if (typeof schema === 'object' && schema !== null) {
+    if (visited.has(schema)) {
+      throw new Error('Circular OpenAPI schema object detected while normalizing.');
+    }
+    visited.add(schema);
+  }
+
   if (Array.isArray(schema)) {
-    return schema.map(normalizeOpenApiSchema);
+    return schema.map((item) => normalizeOpenApiSchema(item, depth + 1, visited));
   }
 
   if (!isRecord(schema)) {
@@ -874,7 +966,7 @@ const normalizeOpenApiSchema = (schema: unknown): unknown => {
     if (key === 'nullable') {
       continue;
     }
-    copy[key] = normalizeOpenApiSchema(value);
+    copy[key] = normalizeOpenApiSchema(value, depth + 1, visited);
   }
 
   if (schema.nullable === true && typeof copy.type === 'string') {
@@ -911,7 +1003,7 @@ const firstProtobufType = (root: protobuf.NamespaceBase): protobuf.Type | undefi
 };
 
 const findProtobufFieldRange = (schemaText: string, fieldName: string) =>
-  findRegexRange(schemaText, new RegExp(`\\b${escapeRegExp(fieldName)}\\b\\s*=`, 'i'), 0) ??
+  findRegexRange(schemaText, new RegExp(`\\b${escapeRegExp(fieldName)}\\b\\s*=`), 0) ??
   findTextRange(schemaText, fieldName);
 
 interface TableFieldRule {
@@ -972,16 +1064,50 @@ const csvCellRange = (text: string, lineIndex: number, columnIndex: number): Tex
     };
   }
 
-  const cells = line.split(',');
-  const startColumn = cells.slice(0, columnIndex).join(',').length + (columnIndex > 0 ? 2 : 1);
-  const cell = cells[columnIndex] ?? '';
+  const cells = csvCellsWithRanges(line);
+  const cell = cells[columnIndex];
+  if (!cell) {
+    return {
+      startLineNumber: lineIndex + 1,
+      startColumn: 1,
+      endLineNumber: lineIndex + 1,
+      endColumn: Math.max(line.length + 1, 2),
+    };
+  }
+
+  const startColumn = cell.start + 1;
 
   return {
     startLineNumber: lineIndex + 1,
     startColumn,
     endLineNumber: lineIndex + 1,
-    endColumn: Math.max(startColumn + cell.length, startColumn + 1),
+    endColumn: Math.max(cell.end + 1, startColumn + 1),
   };
+};
+
+const csvCellsWithRanges = (line: string): Array<{ start: number; end: number }> => {
+  const cells: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index <= line.length; index += 1) {
+    const character = line[index];
+    if (index === line.length || (character === ',' && !inQuotes)) {
+      cells.push({ start, end: index });
+      start = index + 1;
+      continue;
+    }
+
+    if (character === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    }
+  }
+
+  return cells;
 };
 
 interface KeyValueRule {
@@ -1032,7 +1158,7 @@ const parseKeyValueMessage = (text: string) => {
 
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
-    const keyStart = line.indexOf(key) + 1;
+    const keyStart = Math.max(line.search(/\S/) + 1, 1);
     const range = {
       startLineNumber: index + 1,
       startColumn: keyStart,

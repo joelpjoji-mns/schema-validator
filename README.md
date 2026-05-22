@@ -27,3 +27,5 @@ Pushing to `main` runs `.github/workflows/deploy-pages.yml`, builds the static a
 ## Supported adapters
 
 The app ships with focused support for JSON Schema, YAML through JSON Schema, XML with an XSD-lite rule mapper, OpenAPI examples, GraphQL SDL/operations, Protobuf JSON messages, Avro records, CSV table schemas, TOML through JSON Schema, and key-value rule schemas.
+
+See [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) for the exact coverage level and known limits of each adapter.

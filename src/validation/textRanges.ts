@@ -125,11 +125,37 @@ export const describeActual = (value: unknown) => {
 
 export const makeIssue = (
   issue: Omit<ValidationIssue, 'id' | 'severity'> & { severity?: ValidationIssue['severity'] },
-): ValidationIssue => ({
-  id: `${issue.code}-${Math.random().toString(36).slice(2, 9)}`,
-  severity: issue.severity ?? 'error',
-  ...issue,
-});
+): ValidationIssue => {
+  const severity = issue.severity ?? 'error';
+  const stablePayload = JSON.stringify({
+    severity,
+    code: issue.code,
+    title: issue.title,
+    message: issue.message,
+    path: issue.path,
+    expected: issue.expected,
+    actual: issue.actual,
+    schemaPointer: issue.schemaPointer,
+    messagePointer: issue.messagePointer,
+    schemaRange: issue.schemaRange,
+    messageRange: issue.messageRange,
+  });
+
+  return {
+    id: `${issue.code}-${hashString(stablePayload)}`,
+    severity,
+    ...issue,
+  };
+};
+
+const hashString = (value: string) => {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(36);
+};
 
 export const summarizeIssues = (issues: ValidationIssue[], adapterLabel: string) => {
   if (issues.length === 0) {

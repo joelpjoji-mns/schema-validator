@@ -6,6 +6,7 @@ interface XsdChildRule {
   name: string;
   type: string;
   minOccurs: number;
+  maxOccurs: number;
   range: TextRange;
 }
 
@@ -18,6 +19,7 @@ interface XsdAttributeRule {
 
 interface XsdRootRule {
   name: string;
+  containerType: 'sequence' | 'choice' | 'all';
   range: TextRange;
   children: XsdChildRule[];
   attributes: XsdAttributeRule[];
@@ -143,12 +145,13 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
     trimValues: false,
   });
   const parsed = parser.parse(request.messageText) as Record<string, unknown>;
-  const rootValue = parsed[rootRule.name] as Record<string, unknown> | string | undefined;
+  const parsedRootKey = findLocalKey(parsed, rootRule.name);
+  const rootValue = parsedRootKey ? (parsed[parsedRootKey] as Record<string, unknown> | string | undefined) : undefined;
   const rootObject = typeof rootValue === 'object' && rootValue !== null ? rootValue : {};
 
   for (const attribute of rootRule.attributes) {
-    const value = rootObject[`@_${attribute.name}`];
-    if (attribute.required && (value === undefined || value === '')) {
+    const value = getAttributeValue(rootObject, attribute.name);
+    if (attribute.required && value === undefined) {
       issues.push(
         makeIssue({
           code: 'missing-xml-attribute',
@@ -178,11 +181,55 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
     }
   }
 
-  for (const child of rootRule.children) {
-    const value = rootObject[child.name];
-    const isMissing = value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+  const childStates = rootRule.children.map((child) => {
+    const value = getChildValue(rootObject, child.name);
+    const values = value === undefined || value === null ? [] : Array.isArray(value) ? value : [value];
+    return {
+      child,
+      value,
+      values,
+      isMissing: values.length === 0,
+    };
+  });
 
-    if (child.minOccurs > 0 && isMissing) {
+  if (rootRule.containerType === 'choice') {
+    const presentChoices = childStates.filter((state) => !state.isMissing);
+    if (presentChoices.length === 0 && rootRule.children.some((child) => child.minOccurs > 0)) {
+      issues.push(
+        makeIssue({
+          code: 'xsd-choice-missing',
+          title: 'Missing XML choice element',
+          message: `The XSD choice requires one of these elements inside <${rootRule.name}>: ${rootRule.children
+            .map((child) => `<${child.name}>`)
+            .join(', ')}.`,
+          expected: rootRule.children.map((child) => `<${child.name}>`).join(' or '),
+          actual: 'No choice element present',
+          schemaRange: rootRule.range,
+          messageRange: findElementRange(request.messageText, rootRule.name) ?? wholeDocumentRange(request.messageText),
+        }),
+      );
+    } else if (presentChoices.length > 1) {
+      issues.push(
+        makeIssue({
+          code: 'xsd-choice-too-many',
+          title: 'Too many XML choice elements',
+          message: `The XSD choice allows only one of ${rootRule.children
+            .map((child) => `<${child.name}>`)
+            .join(', ')}, but the XML includes ${presentChoices.length}.`,
+          expected: 'Exactly one choice element',
+          actual: presentChoices.map((state) => `<${state.child.name}>`).join(', '),
+          schemaRange: rootRule.range,
+          messageRange:
+            findElementRange(request.messageText, presentChoices[1]?.child.name ?? rootRule.name) ??
+            wholeDocumentRange(request.messageText),
+        }),
+      );
+    }
+  }
+
+  for (const { child, values, isMissing } of childStates) {
+
+    if (rootRule.containerType !== 'choice' && child.minOccurs > 0 && isMissing) {
       issues.push(
         makeIssue({
           code: 'missing-xml-element',
@@ -199,7 +246,23 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
     }
 
     if (!isMissing) {
-      const values = Array.isArray(value) ? value : [value];
+      if (values.length > child.maxOccurs) {
+        issues.push(
+          makeIssue({
+            code: 'xsd-max-occurs',
+            title: `Too many XML elements: ${child.name}`,
+            message: `<${child.name}> appears ${values.length} times, but the XSD allows at most ${formatMaxOccurs(child.maxOccurs)}.`,
+            expected: `maxOccurs=${formatMaxOccurs(child.maxOccurs)}`,
+            actual: `${values.length} occurrence${values.length === 1 ? '' : 's'}`,
+            schemaRange: child.range,
+            messageRange:
+              findElementRange(request.messageText, child.name, child.maxOccurs) ??
+              findElementRange(request.messageText, child.name) ??
+              findElementRange(request.messageText, rootRule.name),
+          }),
+        );
+      }
+
       values.forEach((item, itemIndex) => {
         const textValue = xmlTextValue(item);
         if (textValue.trim() === '' && child.minOccurs > 0) {
@@ -238,16 +301,17 @@ export const validateXmlXsd = (request: ValidationRequest): ValidationResult => 
 
   const allowedChildren = new Set(rootRule.children.map((child) => child.name));
   for (const key of Object.keys(rootObject)) {
-    if (!key.startsWith('@_') && key !== '#text' && !allowedChildren.has(key)) {
+    const keyName = localName(key);
+    if (!key.startsWith('@_') && key !== '#text' && !allowedChildren.has(keyName)) {
       issues.push(
         makeIssue({
           code: 'unexpected-xml-element',
-          title: `Unexpected XML element: ${key}`,
-          message: `<${key}> appears under <${rootRule.name}>, but the XSD sequence does not declare it.`,
+          title: `Unexpected XML element: ${keyName}`,
+          message: `<${keyName}> appears under <${rootRule.name}>, but the XSD sequence does not declare it.`,
           expected: [...allowedChildren].join(', ') || 'No child elements',
-          actual: `<${key}>`,
+          actual: `<${keyName}>`,
           schemaRange: rootRule.range,
-          messageRange: findElementRange(request.messageText, key) ?? wholeDocumentRange(request.messageText),
+          messageRange: findElementRange(request.messageText, keyName) ?? wholeDocumentRange(request.messageText),
           hint: 'Remove the highlighted element or add it to the XSD sequence.',
         }),
       );
@@ -272,6 +336,11 @@ const extractRootRule = (xsdText: string): XsdRootRule | undefined => {
   const rootEnd = findClosingTagOffset(xsdText, rootStart, 'element') ?? elementMatch.index + elementMatch[0].length;
   const rootBlock = xsdText.slice(rootStart, rootEnd);
   const rootRange = rangeFromOffsetSafe(xsdText, rootStart, rootEnd - rootStart);
+  const containerType = rootBlock.includes(':choice')
+    ? 'choice'
+    : rootBlock.includes(':all')
+      ? 'all'
+      : 'sequence';
 
   const children: XsdChildRule[] = [];
   const childPattern = /<(?:xs|xsd):element\b([^>]*?)\/?>(?!\s*<(?:xs|xsd):complexType)/gi;
@@ -292,7 +361,8 @@ const extractRootRule = (xsdText: string): XsdRootRule | undefined => {
     children.push({
       name: childName,
       type: normalizeXsdType(getXmlAttribute(attributes, 'type') ?? 'xs:string'),
-      minOccurs: Number(getXmlAttribute(attributes, 'minOccurs') ?? '1'),
+      minOccurs: parseOccurs(getXmlAttribute(attributes, 'minOccurs'), 1),
+      maxOccurs: parseMaxOccurs(getXmlAttribute(attributes, 'maxOccurs')),
       range: rangeFromOffsetSafe(xsdText, absoluteStart, childMatch[0].length),
     });
   }
@@ -316,13 +386,13 @@ const extractRootRule = (xsdText: string): XsdRootRule | undefined => {
     });
   }
 
-  return { name, range: rootRange, children, attributes };
+  return { name, containerType, range: rootRange, children, attributes };
 };
 
-const getXmlRootName = (xmlText: string) => /<([A-Za-z_][\w:.-]*)\b/.exec(xmlText)?.[1];
+const getXmlRootName = (xmlText: string) => /<(?!\?|!)(?:[A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)\b/.exec(xmlText)?.[1];
 
 const getXmlAttribute = (source: string, name: string) =>
-  new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'i').exec(source)?.[1];
+  new RegExp(`${escapeRegExp(name)}\\s*=\\s*["']([^"']*)["']`, 'i').exec(source)?.[1];
 
 const findClosingTagOffset = (source: string, start: number, localName: string) => {
   const closePattern = new RegExp(`</(?:xs|xsd):${localName}>`, 'i');
@@ -331,6 +401,25 @@ const findClosingTagOffset = (source: string, start: number, localName: string) 
 };
 
 const normalizeXsdType = (type: string) => type.replace(/^xsd:/, 'xs:');
+
+const parseOccurs = (value: string | undefined, fallback: number) => {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const parseMaxOccurs = (value: string | undefined) => {
+  if (value === 'unbounded') {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return parseOccurs(value, 1);
+};
+
+const formatMaxOccurs = (value: number) => (value === Number.POSITIVE_INFINITY ? 'unbounded' : String(value));
 
 const valueMatchesXsdType = (value: string, type: string) => {
   const normalized = normalizeXsdType(type);
@@ -365,9 +454,25 @@ const xmlTextValue = (value: unknown): string => {
   return String(value);
 };
 
+const localName = (name: string) => name.split(':').at(-1) ?? name;
+
+const findLocalKey = (record: Record<string, unknown>, name: string) =>
+  Object.keys(record).find((key) => localName(key.replace(/^@_/, '')) === name);
+
+const getChildValue = (record: Record<string, unknown>, name: string) => {
+  const key = Object.keys(record).find((candidate) => !candidate.startsWith('@_') && localName(candidate) === name);
+  return key ? record[key] : undefined;
+};
+
+const getAttributeValue = (record: Record<string, unknown>, name: string) => {
+  const key = Object.keys(record).find((candidate) => candidate.startsWith('@_') && localName(candidate.slice(2)) === name);
+  return key ? record[key] : undefined;
+};
+
 const findElementRange = (xmlText: string, name: string, occurrence = 0) => {
+  const tagName = `(?:[A-Za-z_][\\w.-]*:)?${escapeRegExp(localName(name))}`;
   const pattern = new RegExp(
-    `<${escapeRegExp(name)}\\b[^>]*>(?:[\\s\\S]*?<\\/${escapeRegExp(name)}>)?|<${escapeRegExp(name)}\\b[^>]*/>`,
+    `<${tagName}\\b[^>]*>(?:[\\s\\S]*?<\\/${tagName}>)?|<${tagName}\\b[^>]*/>`,
     'g',
   );
   let match: RegExpExecArray | null;
@@ -386,7 +491,10 @@ const findElementRange = (xmlText: string, name: string, occurrence = 0) => {
 const findAttributeRange = (xmlText: string, elementName: string, attributeName: string) =>
   findRegexRange(
     xmlText,
-    new RegExp(`<${escapeRegExp(elementName)}\\b[^>]*(${escapeRegExp(attributeName)}\\s*=\\s*["'][^"']*["'])`, 'i'),
+    new RegExp(
+      `<(?:[A-Za-z_][\\w.-]*:)?${escapeRegExp(localName(elementName))}\\b[^>]*((?:[A-Za-z_][\\w.-]*:)?${escapeRegExp(localName(attributeName))}\\s*=\\s*["'][^"']*["'])`,
+      'i',
+    ),
     1,
   );
 
