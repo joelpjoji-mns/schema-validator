@@ -668,11 +668,13 @@ const parseParticleGroup = (
 
     if (childTag.localName === 'element') {
       elements.push(parseElement(childTag, document, rangeLocator, context));
-    } else if (['sequence', 'choice', 'all', 'group', 'any'].includes(childTag.localName)) {
+    } else if (['sequence', 'choice', 'all'].includes(childTag.localName)) {
+      elements.push(...expandNestedParticleElements(childTag, document, rangeLocator, context));
+    } else if (['group', 'any'].includes(childTag.localName)) {
       document.unsupportedFeatures.push({
-        code: 'xsd-nested-particle',
-        title: 'Unsupported nested XSD particle',
-        message: `Nested xs:${childTag.localName} particles are not expanded by this validator yet.`,
+        code: `unsupported-xsd-${childTag.localName}`,
+        title: `Unsupported XSD ${childTag.localName}`,
+        message: `xs:${childTag.localName} particles are not expanded by the TypeScript fallback validator yet.`,
         range: childTag.range,
         sourceId: context.sourceId,
         sourceLabel: context.sourceLabel,
@@ -689,6 +691,23 @@ const parseParticleGroup = (
     sourceId: context.sourceId,
     sourceLabel: context.sourceLabel,
   };
+};
+
+const expandNestedParticleElements = (
+  tag: TagNode,
+  document: ParsedXsdDocument,
+  rangeLocator: XsdRangeLocator,
+  context: SourceContext,
+) => {
+  const nestedGroup = parseParticleGroup(tag, document, rangeLocator, context);
+  if (tag.localName !== 'choice') {
+    return nestedGroup.elements;
+  }
+
+  return nestedGroup.elements.map((element) => ({
+    ...element,
+    minOccurs: 0,
+  }));
 };
 
 const parseAttribute = (

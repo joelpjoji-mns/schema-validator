@@ -112,6 +112,15 @@ export function SchemaSourcesPanel({
     });
   };
 
+  const addSourceForReference = (reference: XsdReferenceSummary) => {
+    onAddSource({
+      label: labelForReference(reference),
+      schemaLocation: reference.schemaLocation,
+      namespace: reference.namespace,
+      text: skeletonForReference(reference),
+    });
+  };
+
   return (
     <div className="schema-sources">
       <div className="sources-toolbar">
@@ -164,19 +173,35 @@ export function SchemaSourcesPanel({
           <div className="sources-section-title">References</div>
           <div className="sources-reference-list" role="list">
             {references.length === 0 ? <div className="sources-empty">No include or import references.</div> : null}
-            {references.map((reference, index) => (
-              <div
-                key={`${reference.kind}-${reference.schemaLocation ?? reference.namespace ?? index}`}
-                className="source-reference"
-                role="listitem"
-              >
-                <span className={`source-status ${reference.resolved ? 'is-resolved' : 'is-missing'}`}>
-                  {reference.resolved ? 'Resolved' : 'Missing'}
-                </span>
-                <strong>{reference.kind}</strong>
-                <span>{reference.schemaLocation ?? reference.namespace ?? 'unnamed reference'}</span>
-              </div>
-            ))}
+            {references.map((reference, index) => {
+              const referenceName = reference.schemaLocation ?? reference.namespace ?? 'unnamed reference';
+              return (
+                <div
+                  key={`${reference.kind}-${referenceName}-${index}`}
+                  className="source-reference"
+                  role="listitem"
+                >
+                  <span className={`source-status ${reference.resolved ? 'is-resolved' : 'is-missing'}`}>
+                    {reference.resolved ? 'Resolved' : 'Missing'}
+                  </span>
+                  <div className="source-reference-body">
+                    <strong>{reference.kind}</strong>
+                    <span>{referenceName}</span>
+                  </div>
+                  {!reference.resolved ? (
+                    <button
+                      type="button"
+                      className="icon-button source-reference-add"
+                      title={`Add ${reference.kind} source`}
+                      aria-label={`Add missing ${reference.kind} source ${referenceName}`}
+                      onClick={() => addSourceForReference(reference)}
+                    >
+                      <FilePlus2 aria-hidden="true" size={14} />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
 
           <div className="sources-section-title">Sources</div>
@@ -311,6 +336,40 @@ const readXmlAttribute = (text: string, name: string) => {
   const match = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(text);
   return match?.[1];
 };
+
+const labelForReference = (reference: XsdReferenceSummary) => {
+  if (reference.schemaLocation) {
+    return rawBasename(reference.schemaLocation) || reference.schemaLocation;
+  }
+
+  if (reference.namespace) {
+    return `${slugReference(reference.namespace)}.xsd`;
+  }
+
+  return `${reference.kind}-source.xsd`;
+};
+
+const skeletonForReference = (reference: XsdReferenceSummary) => {
+  if (!reference.namespace) {
+    return '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">\n</xs:schema>';
+  }
+
+  return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="${escapeXmlAttribute(reference.namespace)}" elementFormDefault="qualified">\n</xs:schema>`;
+};
+
+const rawBasename = (value: string) => value.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? value;
+
+const slugReference = (value: string) => {
+  const slug = value
+    .replace(/^https?:\/\//i, '')
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  return slug || 'imported-schema';
+};
+
+const escapeXmlAttribute = (value: string) =>
+  value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 const normalizeLocation = (value: string) => value.replace(/\\/g, '/').replace(/^\.\//, '').trim().toLowerCase();
 const basename = (value: string) =>

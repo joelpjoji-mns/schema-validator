@@ -452,7 +452,9 @@ select {
 
 .source-reference {
   display: grid;
-  gap: 3px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   border: 1px solid #d7dee8;
   border-radius: 6px;
   padding: 8px;
@@ -462,9 +464,33 @@ select {
   overflow-wrap: anywhere;
 }
 
+.source-reference-body {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
 .source-reference strong {
   font-size: 12px;
   text-transform: capitalize;
+}
+
+.source-reference-body span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-reference-add {
+  width: 28px;
+  height: 28px;
+  color: #255e7e;
+  background: #eaf3f7;
+}
+
+.source-reference-add:hover {
+  border-color: #255e7e;
+  background: #d7edf6;
 }
 
 .source-status {

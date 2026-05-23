@@ -96,8 +96,8 @@ test('resolves an XSD include from the Sources tab', async ({ page }) => {
   await expect(page.getByText(/XSD schema error/i).first()).toBeVisible();
 
   await page.getByRole('tab', { name: /sources/i }).click();
-  await page.getByRole('button', { name: /add xsd/i }).click();
-  await page.getByLabel('schemaLocation').fill('header-types.xsd');
+  await page.getByRole('button', { name: /add missing include source header-types\.xsd/i }).click();
+  await expect(page.getByLabel('schemaLocation')).toHaveValue('header-types.xsd');
   await setSourceEditorText(
     page,
     `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -115,4 +115,24 @@ test('resolves an XSD include from the Sources tab', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /validation passed/i })).toBeVisible();
   await expect(page.getByText(/Unsupported nested XSD particle/i)).toHaveCount(0);
   await expect(page.locator('.source-status.is-resolved', { hasText: 'Resolved' })).toBeVisible();
+});
+
+test('prefills a missing XSD import from the detected namespace', async ({ page }) => {
+  await page.goto('/');
+  await setEditorText(
+    page,
+    'Schema',
+    `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:common="https://example.test/common">
+  <xs:import namespace="https://example.test/common" />
+  <xs:element name="Envelope" type="common:EnvelopeType" />
+</xs:schema>`,
+  );
+
+  await expect(page.getByText(/Detected: XSD/i)).toBeVisible();
+  await page.getByRole('tab', { name: /sources/i }).click();
+  await page.getByRole('button', { name: /add missing import source https:\/\/example\.test\/common/i }).click();
+
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('example-test-common.xsd');
+  await expect(page.getByLabel('schemaLocation')).toHaveValue('');
+  await expect(page.getByLabel('Namespace', { exact: true })).toHaveValue('https://example.test/common');
 });

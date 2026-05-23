@@ -120,6 +120,10 @@ class XsdModelValidator {
 
   private addUnsupportedFeatureIssues() {
     for (const feature of this.model.unsupportedFeatures) {
+      if (feature.code === 'xsd-nested-particle') {
+        continue;
+      }
+
       this.issues.push(
         makeIssue({
           code: 'unsupported-xsd-feature',

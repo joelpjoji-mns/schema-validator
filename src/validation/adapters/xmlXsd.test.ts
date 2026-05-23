@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { validateRequest } from '../registry';
+import { parseXsdModel } from './xsd/parseXsdModel';
+import { validateXmlAgainstXsdModel } from './xsd/validateXsdModel';
 
 const orderSchema = `
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -846,6 +848,51 @@ describe('XML/XSD lite edge cases', () => {
 
     expect(result.ok).toBe(true);
     expect(result.issues.map((issue) => issue.title).join('\n')).not.toContain('Unsupported nested XSD particle');
+  });
+
+  it('expands nested sequence, choice, and all particles in the TypeScript fallback model', async () => {
+    const schemaText = `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Header" type="HeaderType" />
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="EnvelopeVersion" type="xs:string" />
+      <xs:sequence>
+        <xs:element name="Filter" type="xs:string" />
+      </xs:sequence>
+      <xs:choice>
+        <xs:element name="Level1" type="xs:string" />
+        <xs:element name="Level2" type="xs:string" />
+      </xs:choice>
+      <xs:all>
+        <xs:element name="BatchId" type="xs:string" />
+      </xs:all>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+    const parsed = parseXsdModel({
+      primary: {
+        id: 'primary-schema',
+        label: 'Main schema',
+        text: schemaText,
+      },
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) {
+      return;
+    }
+
+    const issues = validateXmlAgainstXsdModel(
+      parsed.model,
+      '<Header><EnvelopeVersion>1.0</EnvelopeVersion><Filter>Level2</Filter><Level2>yes</Level2><BatchId>B-1</BatchId></Header>',
+    );
+
+    expect(parsed.model.unsupportedFeatures.map((feature) => feature.title).join('\n')).not.toContain(
+      'Unsupported nested XSD particle',
+    );
+    expect(issues.map((issue) => issue.title).join('\n')).not.toContain('Unsupported nested XSD particle');
+    expect(issues).toHaveLength(0);
   });
 
   it('validates wildcard elements and wildcard attributes', async () => {
