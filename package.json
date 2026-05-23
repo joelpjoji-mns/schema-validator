@@ -1,5 +1,6 @@
 {
   "name": "schema-validator",
+  "description": "Static, local-first schema validation workbench for JSON Schema, XSD/XML, OpenAPI, GraphQL, Protobuf, Avro, CSV, TOML, and key-value files.",
   "private": true,
   "version": "0.1.0",
   "type": "module",
