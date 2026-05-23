@@ -11,6 +11,18 @@ export interface XsdOccurrence {
 export interface XsdParticleGroup extends XsdOccurrence {
   kind: XsdContainerKind;
   elements: XsdElementDecl[];
+  particles?: XsdParticleGroupItem[];
+  range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+}
+
+export type XsdParticleGroupItem =
+  | { kind: 'element'; element: XsdElementDecl }
+  | { kind: 'groupRef'; groupRef: XsdGroupRef };
+
+export interface XsdGroupRef extends XsdOccurrence {
+  refName: string;
   range: TextRange;
   sourceId: string;
   sourceLabel: string;
@@ -37,8 +49,35 @@ export interface XsdAttributeDecl {
   sourceLabel: string;
 }
 
+export interface XsdAttributeGroupRef {
+  refName: string;
+  range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+}
+
+export interface XsdAttributeGroup {
+  name: string;
+  attributes: XsdAttributeDecl[];
+  attributeGroupRefs: XsdAttributeGroupRef[];
+  range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+}
+
 export interface XsdSimpleContent {
   baseType: string;
+  range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+}
+
+export interface XsdComplexContent {
+  baseType: string;
+  derivation: 'extension' | 'restriction';
+  group?: XsdParticleGroup;
+  attributes: XsdAttributeDecl[];
+  attributeGroupRefs: XsdAttributeGroupRef[];
   range: TextRange;
   sourceId: string;
   sourceLabel: string;
@@ -48,7 +87,17 @@ export interface XsdComplexType {
   name: string;
   group?: XsdParticleGroup;
   simpleContent?: XsdSimpleContent;
+  complexContent?: XsdComplexContent;
   attributes: XsdAttributeDecl[];
+  attributeGroupRefs: XsdAttributeGroupRef[];
+  range: TextRange;
+  sourceId: string;
+  sourceLabel: string;
+}
+
+export interface XsdNamedGroup {
+  name: string;
+  group: XsdParticleGroup;
   range: TextRange;
   sourceId: string;
   sourceLabel: string;
@@ -119,6 +168,8 @@ export interface XsdSchemaModel {
   complexTypes: Map<string, XsdComplexType>;
   simpleTypes: Map<string, XsdSimpleType>;
   attributes: Map<string, XsdAttributeDecl>;
+  groups: Map<string, XsdNamedGroup>;
+  attributeGroups: Map<string, XsdAttributeGroup>;
   unsupportedFeatures: XsdUnsupportedFeature[];
 }
 

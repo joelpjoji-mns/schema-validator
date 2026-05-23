@@ -173,6 +173,150 @@ describe('introspectSchema', () => {
     expect(summary.root?.children.map((child) => child.name)).toEqual(['ShipmentID']);
   });
 
+  it('expands XSD summary fields from included source documents', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="header-types.xsd" />
+  <xs:element name="ShipmentNotification">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="HeaderType" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'header-types',
+          label: 'header-types.xsd',
+          schemaLocation: 'header-types.xsd',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="EnvelopeVersion" type="xs:string" />
+      <xs:element name="Filter" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+        },
+      ],
+    });
+
+    const header = findSummaryNode(summary.root, 'Header');
+
+    expect(summary.ok).toBe(true);
+    expect(summary.warnings.join('\n')).not.toContain('Missing XSD include');
+    expect(header?.children.map((child) => child.name)).toEqual(['EnvelopeVersion', 'Filter']);
+  });
+
+  it('expands imported XSD element references in the summary', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:common="https://example.test/common">
+  <xs:import namespace="https://example.test/common" />
+  <xs:element name="Envelope">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="common:BusinessKey" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'common-types',
+          label: 'common-types.xsd',
+          namespace: 'https://example.test/common',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="https://example.test/common">
+  <xs:element name="BusinessKey" type="BusinessKeyType" />
+  <xs:complexType name="BusinessKeyType">
+    <xs:sequence>
+      <xs:element name="SourceSystem" type="xs:string" />
+      <xs:element name="ID" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+        },
+      ],
+    });
+
+    const businessKey = findSummaryNode(summary.root, 'BusinessKey');
+
+    expect(summary.ok).toBe(true);
+    expect(businessKey?.children.map((child) => child.name)).toEqual(['SourceSystem', 'ID']);
+  });
+
+  it('expands XSD group and attributeGroup references in the summary', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:group name="AddressFields">
+    <xs:sequence>
+      <xs:element name="Street" type="xs:string" />
+      <xs:element name="City" type="xs:string" />
+    </xs:sequence>
+  </xs:group>
+  <xs:attributeGroup name="AuditAttributes">
+    <xs:attribute name="createdBy" type="xs:string" use="required" />
+    <xs:attribute name="traceId" type="xs:string" />
+  </xs:attributeGroup>
+  <xs:element name="Address">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:group ref="AddressFields" />
+      </xs:sequence>
+      <xs:attributeGroup ref="AuditAttributes" />
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+    });
+
+    expect(summary.root?.children.map((child) => child.name)).toEqual(['Street', 'City', '@createdBy', '@traceId']);
+    expect(findSummaryNode(summary.root, '@createdBy')?.required).toBe(true);
+  });
+
+  it('expands XSD complexContent extension fields in the summary', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ExtendedShipment" type="ExtendedShipmentType" />
+  <xs:complexType name="ShipmentBaseType">
+    <xs:sequence>
+      <xs:element name="ShipmentID" type="xs:string" />
+    </xs:sequence>
+    <xs:attribute name="baseVersion" type="xs:string" use="required" />
+  </xs:complexType>
+  <xs:complexType name="ExtendedShipmentType">
+    <xs:complexContent>
+      <xs:extension base="ShipmentBaseType">
+        <xs:sequence>
+          <xs:element name="Carrier" type="xs:string" />
+        </xs:sequence>
+        <xs:attribute name="extensionVersion" type="xs:string" />
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+</xs:schema>`,
+    });
+
+    expect(summary.root?.children.map((child) => child.name)).toEqual([
+      'ShipmentID',
+      '@baseVersion',
+      'Carrier',
+      '@extensionVersion',
+    ]);
+    expect(summary.root?.constraints).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'derivation', value: 'ShipmentBaseType' })]),
+    );
+  });
+
   it('summarizes GraphQL SDL', () => {
     const summary = introspectSchema({
       schemaFormat: 'graphql',

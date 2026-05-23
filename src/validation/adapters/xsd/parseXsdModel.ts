@@ -3,12 +3,18 @@ import { makeIssue, rangeFromOffset, wholeDocumentRange } from '../../textRanges
 import type { RelatedSchemaDocument, TextRange, ValidationIssue } from '../../types';
 import type {
     XsdAttributeDecl,
+    XsdAttributeGroup,
+    XsdAttributeGroupRef,
+    XsdComplexContent,
     XsdComplexType,
     XsdElementDecl,
     XsdExternalReference,
+    XsdGroupRef,
     XsdMaxOccurs,
     XsdModelParseResult,
+    XsdNamedGroup,
     XsdParticleGroup,
+    XsdParticleGroupItem,
     XsdRestriction,
     XsdRestrictionKind,
     XsdSchemaModel,
@@ -40,6 +46,8 @@ interface ParsedXsdDocument {
   complexTypes: Map<string, XsdComplexType>;
   simpleTypes: Map<string, XsdSimpleType>;
   attributes: Map<string, XsdAttributeDecl>;
+  groups: Map<string, XsdNamedGroup>;
+  attributeGroups: Map<string, XsdAttributeGroup>;
   externalReferences: XsdExternalReference[];
   unsupportedFeatures: XsdUnsupportedFeature[];
 }
@@ -101,6 +109,8 @@ export const parseXsdModel = (input: string | XsdModelParseInput): XsdModelParse
     complexTypes: new Map(),
     simpleTypes: new Map(),
     attributes: new Map(),
+    groups: new Map(),
+    attributeGroups: new Map(),
     unsupportedFeatures: [],
   };
 
@@ -225,19 +235,34 @@ const parseXsdDocument = (
     complexTypes: new Map(),
     simpleTypes: new Map(),
     attributes: new Map(),
+    groups: new Map(),
+    attributeGroups: new Map(),
     externalReferences: [],
     unsupportedFeatures: findUnsupportedFeatures(source.text, context),
   };
 
-  for (const child of schemaNode.children) {
-    const tag = toTagNode(child, rangeLocator);
-    if (!tag) {
-      continue;
-    }
+  const childTags = schemaNode.children
+    .map((child) => toTagNode(child, rangeLocator))
+    .filter((tag): tag is TagNode => Boolean(tag));
 
+  for (const tag of childTags) {
     if (tag.localName === 'include' || tag.localName === 'import') {
       document.externalReferences.push(parseExternalReference(tag, context));
-    } else if (tag.localName === 'element') {
+    } else if (tag.localName === 'group') {
+      const group = parseNamedGroup(tag, document, rangeLocator, context);
+      if (group) {
+        document.groups.set(normalizeTypeName(group.name), group);
+      }
+    } else if (tag.localName === 'attributeGroup') {
+      const attributeGroup = parseAttributeGroup(tag, document, rangeLocator, context);
+      if (attributeGroup) {
+        document.attributeGroups.set(normalizeTypeName(attributeGroup.name), attributeGroup);
+      }
+    }
+  }
+
+  for (const tag of childTags) {
+    if (tag.localName === 'element') {
       const element = parseElement(tag, document, rangeLocator, context);
       if (element.name) {
         document.globalElements.set(normalizeTypeName(element.name), element);
@@ -396,6 +421,8 @@ const mergeDeclarations = (model: XsdSchemaModel, document: ParsedXsdDocument) =
   mergeMap(model.complexTypes, document.complexTypes, 'complex type', model.unsupportedFeatures);
   mergeMap(model.simpleTypes, document.simpleTypes, 'simple type', model.unsupportedFeatures);
   mergeMap(model.attributes, document.attributes, 'attribute', model.unsupportedFeatures);
+  mergeMap(model.groups, document.groups, 'group', model.unsupportedFeatures);
+  mergeMap(model.attributeGroups, document.attributeGroups, 'attribute group', model.unsupportedFeatures);
 };
 
 const mergeMap = <TValue extends { name: string; range: TextRange; sourceId: string; sourceLabel: string }>(
@@ -494,8 +521,10 @@ const parseComplexType = (
   context: SourceContext,
 ): XsdComplexType => {
   const attributes: XsdAttributeDecl[] = [];
+  const attributeGroupRefs: XsdAttributeGroupRef[] = [];
   let group: XsdParticleGroup | undefined;
   let simpleContent: XsdSimpleContent | undefined;
+  let complexContent: XsdComplexContent | undefined;
 
   if (readAttribute(tag.attributes, 'mixed') === 'true') {
     document.unsupportedFeatures.push({
@@ -518,21 +547,20 @@ const parseComplexType = (
       group = parseParticleGroup(childTag, document, rangeLocator, context);
     } else if (childTag.localName === 'attribute') {
       attributes.push(parseAttribute(childTag, document, rangeLocator, context));
+    } else if (childTag.localName === 'attributeGroup') {
+      const attributeGroupRef = parseAttributeGroupRef(childTag, context);
+      if (attributeGroupRef) {
+        attributeGroupRefs.push(attributeGroupRef);
+      }
     } else if (childTag.localName === 'simpleContent') {
       const parsedSimpleContent = parseSimpleContentExtension(childTag, name, document, rangeLocator, context);
       if (parsedSimpleContent) {
         simpleContent = parsedSimpleContent.simpleContent;
         attributes.push(...parsedSimpleContent.attributes);
+        attributeGroupRefs.push(...parsedSimpleContent.attributeGroupRefs);
       }
     } else if (childTag.localName === 'complexContent') {
-      document.unsupportedFeatures.push({
-        code: 'xsd-content-derivation',
-        title: 'Unsupported XSD type derivation',
-        message: `Complex type ${name} uses ${childTag.localName}, so validation would be incomplete without deriving the base type.`,
-        range: childTag.range,
-        sourceId: context.sourceId,
-        sourceLabel: context.sourceLabel,
-      });
+      complexContent = parseComplexContent(childTag, name, document, rangeLocator, context);
     }
   }
 
@@ -540,8 +568,157 @@ const parseComplexType = (
     name,
     group,
     simpleContent,
+    complexContent,
     attributes,
+    attributeGroupRefs,
     range: tag.range,
+    sourceId: context.sourceId,
+    sourceLabel: context.sourceLabel,
+  };
+};
+
+const parseNamedGroup = (
+  tag: TagNode,
+  document: ParsedXsdDocument,
+  rangeLocator: XsdRangeLocator,
+  context: SourceContext,
+): XsdNamedGroup | undefined => {
+  const name = readAttribute(tag.attributes, 'name');
+  const particleTag = tag.children
+    .map((child) => toTagNode(child, rangeLocator))
+    .find((child) => child && ['sequence', 'choice', 'all'].includes(child.localName));
+
+  if (!name || !particleTag) {
+    return undefined;
+  }
+
+  return {
+    name: normalizeTypeName(name),
+    group: parseParticleGroup(particleTag, document, rangeLocator, context),
+    range: tag.range,
+    sourceId: context.sourceId,
+    sourceLabel: context.sourceLabel,
+  };
+};
+
+const parseAttributeGroup = (
+  tag: TagNode,
+  document: ParsedXsdDocument,
+  rangeLocator: XsdRangeLocator,
+  context: SourceContext,
+): XsdAttributeGroup | undefined => {
+  const name = readAttribute(tag.attributes, 'name');
+  if (!name) {
+    return undefined;
+  }
+
+  const attributes: XsdAttributeDecl[] = [];
+  const attributeGroupRefs: XsdAttributeGroupRef[] = [];
+  for (const child of tag.children) {
+    const childTag = toTagNode(child, rangeLocator);
+    if (!childTag) {
+      continue;
+    }
+
+    if (childTag.localName === 'attribute') {
+      attributes.push(parseAttribute(childTag, document, rangeLocator, context));
+    } else if (childTag.localName === 'attributeGroup') {
+      const attributeGroupRef = parseAttributeGroupRef(childTag, context);
+      if (attributeGroupRef) {
+        attributeGroupRefs.push(attributeGroupRef);
+      }
+    }
+  }
+
+  return {
+    name: normalizeTypeName(name),
+    attributes,
+    attributeGroupRefs,
+    range: tag.range,
+    sourceId: context.sourceId,
+    sourceLabel: context.sourceLabel,
+  };
+};
+
+const parseAttributeGroupRef = (tag: TagNode, context: SourceContext): XsdAttributeGroupRef | undefined => {
+  const refName = readAttribute(tag.attributes, 'ref');
+  if (!refName) {
+    return undefined;
+  }
+
+  return {
+    refName: normalizeTypeName(refName),
+    range: tag.range,
+    sourceId: context.sourceId,
+    sourceLabel: context.sourceLabel,
+  };
+};
+
+const parseComplexContent = (
+  tag: TagNode,
+  typeName: string,
+  document: ParsedXsdDocument,
+  rangeLocator: XsdRangeLocator,
+  context: SourceContext,
+): XsdComplexContent | undefined => {
+  const derivationTag = tag.children
+    .map((child) => toTagNode(child, rangeLocator))
+    .find((child) => child && ['extension', 'restriction'].includes(child.localName));
+
+  if (!derivationTag) {
+    document.unsupportedFeatures.push({
+      code: 'xsd-complex-content-derivation-missing',
+      title: 'XSD complexContent derivation is missing',
+      message: `Complex type ${typeName} uses xs:complexContent without an xs:extension or xs:restriction child.`,
+      range: tag.range,
+      sourceId: context.sourceId,
+      sourceLabel: context.sourceLabel,
+    });
+    return undefined;
+  }
+
+  const baseType = readAttribute(derivationTag.attributes, 'base');
+  if (!baseType) {
+    document.unsupportedFeatures.push({
+      code: 'xsd-complex-content-base-missing',
+      title: 'XSD complexContent base is missing',
+      message: `Complex type ${typeName} uses xs:${derivationTag.localName} without a base type.`,
+      range: derivationTag.range,
+      sourceId: context.sourceId,
+      sourceLabel: context.sourceLabel,
+    });
+    return undefined;
+  }
+
+  const attributes: XsdAttributeDecl[] = [];
+  const attributeGroupRefs: XsdAttributeGroupRef[] = [];
+  let group: XsdParticleGroup | undefined;
+
+  for (const child of derivationTag.children) {
+    const childTag = toTagNode(child, rangeLocator);
+    if (!childTag) {
+      continue;
+    }
+
+    if (['sequence', 'choice', 'all'].includes(childTag.localName)) {
+      group = parseParticleGroup(childTag, document, rangeLocator, context);
+    } else if (childTag.localName === 'attribute') {
+      attributes.push(parseAttribute(childTag, document, rangeLocator, context));
+    } else if (childTag.localName === 'attributeGroup') {
+      const attributeGroupRef = parseAttributeGroupRef(childTag, context);
+      if (attributeGroupRef) {
+        attributeGroupRefs.push(attributeGroupRef);
+      }
+    }
+  }
+
+  return {
+    baseType: normalizeTypeName(baseType),
+    derivation: derivationTag.localName === 'restriction' ? 'restriction' : 'extension',
+    group,
+    attributes,
+    attributeGroupRefs,
+    range: derivationTag.range,
     sourceId: context.sourceId,
     sourceLabel: context.sourceLabel,
   };
@@ -553,7 +730,9 @@ const parseSimpleContentExtension = (
   document: ParsedXsdDocument,
   rangeLocator: XsdRangeLocator,
   context: SourceContext,
-): { simpleContent: XsdSimpleContent; attributes: XsdAttributeDecl[] } | undefined => {
+):
+  | { simpleContent: XsdSimpleContent; attributes: XsdAttributeDecl[]; attributeGroupRefs: XsdAttributeGroupRef[] }
+  | undefined => {
   let extensionTag: TagNode | undefined;
 
   for (const child of tag.children) {
@@ -612,6 +791,7 @@ const parseSimpleContentExtension = (
   }
 
   const attributes: XsdAttributeDecl[] = [];
+  const attributeGroupRefs: XsdAttributeGroupRef[] = [];
   for (const child of extensionTag.children) {
     const childTag = toTagNode(child, rangeLocator);
     if (!childTag) {
@@ -620,7 +800,12 @@ const parseSimpleContentExtension = (
 
     if (childTag.localName === 'attribute') {
       attributes.push(parseAttribute(childTag, document, rangeLocator, context));
-    } else if (childTag.localName === 'attributeGroup' || childTag.localName === 'anyAttribute') {
+    } else if (childTag.localName === 'attributeGroup') {
+      const attributeGroupRef = parseAttributeGroupRef(childTag, context);
+      if (attributeGroupRef) {
+        attributeGroupRefs.push(attributeGroupRef);
+      }
+    } else if (childTag.localName === 'anyAttribute') {
       document.unsupportedFeatures.push({
         code: 'xsd-simple-content-attribute-derivation',
         title: `Unsupported simpleContent attribute feature: ${childTag.localName}`,
@@ -649,6 +834,7 @@ const parseSimpleContentExtension = (
       sourceLabel: context.sourceLabel,
     },
     attributes,
+    attributeGroupRefs,
   };
 };
 
@@ -659,6 +845,7 @@ const parseParticleGroup = (
   context: SourceContext,
 ): XsdParticleGroup => {
   const elements: XsdElementDecl[] = [];
+  const particles: XsdParticleGroupItem[] = [];
 
   for (const child of tag.children) {
     const childTag = toTagNode(child, rangeLocator);
@@ -667,10 +854,26 @@ const parseParticleGroup = (
     }
 
     if (childTag.localName === 'element') {
-      elements.push(parseElement(childTag, document, rangeLocator, context));
+      const element = parseElement(childTag, document, rangeLocator, context);
+      elements.push(element);
+      particles.push({ kind: 'element', element });
     } else if (['sequence', 'choice', 'all'].includes(childTag.localName)) {
-      elements.push(...expandNestedParticleElements(childTag, document, rangeLocator, context));
-    } else if (['group', 'any'].includes(childTag.localName)) {
+      const nestedGroup = parseParticleGroup(childTag, document, rangeLocator, context);
+      const nestedElements = childTag.localName === 'choice'
+        ? nestedGroup.elements.map((element) => ({ ...element, minOccurs: 0 }))
+        : nestedGroup.elements;
+      elements.push(...nestedElements);
+      particles.push(...xsdParticleItemsForNestedGroup(nestedGroup, childTag.localName === 'choice'));
+    } else if (childTag.localName === 'group') {
+      const groupRef = parseGroupRef(childTag, context);
+      if (groupRef) {
+        particles.push({ kind: 'groupRef', groupRef });
+        const referencedGroup = document.groups.get(normalizeTypeName(groupRef.refName));
+        if (referencedGroup) {
+          elements.push(...referencedGroup.group.elements);
+        }
+      }
+    } else if (childTag.localName === 'any') {
       document.unsupportedFeatures.push({
         code: `unsupported-xsd-${childTag.localName}`,
         title: `Unsupported XSD ${childTag.localName}`,
@@ -685,6 +888,7 @@ const parseParticleGroup = (
   return {
     kind: tag.localName as XsdParticleGroup['kind'],
     elements,
+    particles,
     minOccurs: parseOccurs(readAttribute(tag.attributes, 'minOccurs'), 1),
     maxOccurs: parseMaxOccurs(readAttribute(tag.attributes, 'maxOccurs')),
     range: tag.range,
@@ -693,21 +897,35 @@ const parseParticleGroup = (
   };
 };
 
-const expandNestedParticleElements = (
-  tag: TagNode,
-  document: ParsedXsdDocument,
-  rangeLocator: XsdRangeLocator,
-  context: SourceContext,
-) => {
-  const nestedGroup = parseParticleGroup(tag, document, rangeLocator, context);
-  if (tag.localName !== 'choice') {
-    return nestedGroup.elements;
+const xsdParticleItemsForNestedGroup = (group: XsdParticleGroup, isOptionalChoice: boolean): XsdParticleGroupItem[] => {
+  const particles = group.particles ?? group.elements.map((element) => ({ kind: 'element' as const, element }));
+  if (!isOptionalChoice) {
+    return particles;
   }
 
-  return nestedGroup.elements.map((element) => ({
-    ...element,
-    minOccurs: 0,
-  }));
+  return particles.map((particle) => {
+    if (particle.kind === 'element') {
+      return { kind: 'element', element: { ...particle.element, minOccurs: 0 } };
+    }
+
+    return { kind: 'groupRef', groupRef: { ...particle.groupRef, minOccurs: 0 } };
+  });
+};
+
+const parseGroupRef = (tag: TagNode, context: SourceContext): XsdGroupRef | undefined => {
+  const refName = readAttribute(tag.attributes, 'ref');
+  if (!refName) {
+    return undefined;
+  }
+
+  return {
+    refName: normalizeTypeName(refName),
+    minOccurs: parseOccurs(readAttribute(tag.attributes, 'minOccurs'), 1),
+    maxOccurs: parseMaxOccurs(readAttribute(tag.attributes, 'maxOccurs')),
+    range: tag.range,
+    sourceId: context.sourceId,
+    sourceLabel: context.sourceLabel,
+  };
 };
 
 const parseAttribute = (

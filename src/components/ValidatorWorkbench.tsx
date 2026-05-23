@@ -42,7 +42,15 @@ export function ValidatorWorkbench() {
   const supportedPair = isSupportedFormatPair(schemaFormat, messageFormat);
   const activeIssue = result?.issues.find((issue) => issue.id === activeIssueId);
   const schemaDetection = useMemo(() => detectSchemaFormat(schemaText), [schemaText]);
-  const schemaSummary = useMemo(() => introspectSchema({ schemaText, schemaFormat }), [schemaFormat, schemaText]);
+  const schemaSummary = useMemo(
+    () =>
+      introspectSchema({
+        schemaText,
+        schemaFormat,
+        relatedSchemas: schemaFormat === 'xsd' ? xsdSources : undefined,
+      }),
+    [schemaFormat, schemaText, xsdSources],
+  );
 
   const schemaIssues = useMemo(
     () =>

@@ -1,4 +1,4 @@
-import type { SchemaFormat, TextRange } from '../types';
+import type { RelatedSchemaDocument, SchemaFormat, TextRange } from '../types';
 
 export type SchemaSummaryNodeKind =
   | 'root'
@@ -74,4 +74,5 @@ export interface SchemaSummary {
 export interface SchemaSummaryRequest {
   schemaText: string;
   schemaFormat: SchemaFormat;
+  relatedSchemas?: RelatedSchemaDocument[];
 }

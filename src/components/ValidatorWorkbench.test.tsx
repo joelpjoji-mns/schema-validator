@@ -256,6 +256,12 @@ describe('ValidatorWorkbench', () => {
         relatedSchemas: [expect.objectContaining({ schemaLocation: 'header-types.xsd' })],
       }),
     );
+
+    await user.click(screen.getByRole('tab', { name: /summary/i }));
+    const tree = within(screen.getByRole('tree'));
+    expect(tree.getByText('Header')).toBeInTheDocument();
+    expect(tree.getByText('EnvelopeVersion')).toBeInTheDocument();
+    expect(tree.getByText('Filter')).toBeInTheDocument();
   });
 
   it('prefills namespace imports from missing references', async () => {

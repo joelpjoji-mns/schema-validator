@@ -147,6 +147,11 @@ test('resolves an XSD include from the Sources tab', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /validation passed/i })).toBeVisible();
   await expect(page.getByText(/Unsupported nested XSD particle/i)).toHaveCount(0);
   await expect(page.locator('.source-status.is-resolved', { hasText: 'Resolved' })).toBeVisible();
+
+  await page.getByRole('tab', { name: /summary/i }).click();
+  await expect(page.getByRole('tree').getByText('Header')).toBeVisible();
+  await expect(page.getByRole('tree').getByText('EnvelopeVersion')).toBeVisible();
+  await expect(page.getByRole('tree').getByText('Filter')).toBeVisible();
 });
 
 test('prefills a missing XSD import from the detected namespace', async ({ page }) => {

@@ -1,4 +1,3 @@
-import { XMLValidator } from 'fast-xml-parser';
 import {
     buildSchema,
     getNamedType,
@@ -19,11 +18,24 @@ import {
     getValueAtPath,
     isRecord,
     pointerToSegments,
-    rangeFromOffset,
     segmentsToPointer,
     wholeDocumentRange,
 } from '../textRanges';
-import type { SchemaFormat } from '../types';
+import { formatMaxOccurs, normalizeTypeName, parseXsdModel, PRIMARY_XSD_SOURCE_ID } from '../adapters/xsd/parseXsdModel';
+import type {
+  XsdAttributeDecl,
+  XsdAttributeGroupRef,
+  XsdComplexContent,
+  XsdComplexType,
+  XsdElementDecl,
+  XsdGroupRef,
+  XsdParticleGroup,
+  XsdParticleGroupItem,
+  XsdSchemaModel,
+  XsdSimpleType,
+  XsdUnsupportedFeature,
+} from '../adapters/xsd/types';
+import type { RelatedSchemaDocument, SchemaFormat, TextRange } from '../types';
 import type { SchemaConstraint, SchemaSummary, SchemaSummaryNode, SchemaSummaryRequest } from './types';
 
 const MAX_SUMMARY_DEPTH = 24;
@@ -41,7 +53,7 @@ interface JsonWalkState extends BuildState {
   refStack: Set<string>;
 }
 
-export const introspectSchema = ({ schemaText, schemaFormat }: SchemaSummaryRequest): SchemaSummary => {
+export const introspectSchema = ({ schemaText, schemaFormat, relatedSchemas }: SchemaSummaryRequest): SchemaSummary => {
   const text = schemaText.trim();
   if (!text) {
     return createSummary(schemaFormat, 'Schema summary', undefined, ['Paste or upload a schema to build a summary.']);
@@ -49,7 +61,7 @@ export const introspectSchema = ({ schemaText, schemaFormat }: SchemaSummaryRequ
 
   try {
     if (schemaFormat === 'xsd') {
-      return introspectXsd(schemaText, schemaFormat);
+      return introspectXsd(schemaText, schemaFormat, relatedSchemas);
     }
     if (schemaFormat === 'graphql') {
       return introspectGraphql(schemaText, schemaFormat);
@@ -895,276 +907,438 @@ const protobufChildren = (
   });
 };
 
-const introspectXsd = (schemaText: string, schemaFormat: SchemaFormat): SchemaSummary => {
-  const xsdSyntax = XMLValidator.validate(schemaText, { allowBooleanAttributes: true });
-  if (xsdSyntax !== true) {
-    return createSummary(schemaFormat, 'XSD summary', undefined, [], [xsdSyntax.err.msg]);
+const introspectXsd = (
+  schemaText: string,
+  schemaFormat: SchemaFormat,
+  relatedSchemas: RelatedSchemaDocument[] = [],
+): SchemaSummary => {
+  const parsed = parseXsdModel({
+    primary: {
+      id: PRIMARY_XSD_SOURCE_ID,
+      label: 'Main schema',
+      text: schemaText,
+    },
+    relatedSchemas,
+  });
+
+  if (!parsed.ok) {
+    return createSummary(
+      schemaFormat,
+      'XSD summary',
+      undefined,
+      [],
+      parsed.issues.map((issue) => issue.message),
+    );
   }
 
-  const state: BuildState = { count: 0, warnings: [], maxDepth: 0 };
-  if (/<(?:xs|xsd):(include|import|group|extension|redefine)\b/i.test(schemaText)) {
-    state.warnings.push('Some advanced XSD constructs are listed but not fully expanded in the summary.');
-  }
-
-  const complexTypes = collectNamedBlocks(schemaText, 'complexType');
-  const simpleTypes = collectNamedBlocks(schemaText, 'simpleType');
-  const rootElement = firstTopLevelElement(schemaText);
+  const state: BuildState = { count: 0, warnings: xsdSummaryWarnings(parsed.model), maxDepth: 0 };
+  const rootElementName = parsed.model.rootElementName ? normalizeTypeName(parsed.model.rootElementName) : undefined;
+  const rootElement = rootElementName ? parsed.model.globalElements.get(rootElementName) : undefined;
   if (!rootElement) {
     return createSummary(schemaFormat, 'XSD summary', undefined, ['No top-level xs:element was found.']);
   }
 
-  const root = xsdElementNode(rootElement, schemaText, complexTypes, simpleTypes, state, [], 0, true, 1, 'root');
+  const root = xsdElementNodeFromModel(rootElement, {
+    model: parsed.model,
+    state,
+    activeTypePath: [],
+    depth: 0,
+    required: true,
+    order: 1,
+    kind: 'root',
+  });
   return createSummary(schemaFormat, 'XSD summary', root, state.warnings);
 };
 
-interface XsdElementMatch {
-  name: string;
-  type?: string;
-  minOccurs?: string;
-  maxOccurs?: string;
-  block: string;
-  start: number;
-  length: number;
+interface XsdElementSummaryOptions {
+  model: XsdSchemaModel;
+  state: BuildState;
+  activeTypePath: string[];
+  depth: number;
+  required: boolean;
+  order: number;
+  kind: SchemaSummaryNode['kind'];
 }
 
-const xsdElementNode = (
-  element: XsdElementMatch,
-  schemaText: string,
-  complexTypes: Map<string, string>,
-  simpleTypes: Map<string, string>,
-  state: BuildState,
-  activeTypePath: string[],
-  depth: number,
-  required: boolean,
-  order: number,
-  kind: SchemaSummaryNode['kind'],
+interface XsdComplexChildrenOptions {
+  model: XsdSchemaModel;
+  state: BuildState;
+  activeTypePath: string[];
+  depth: number;
+}
+
+const xsdElementNodeFromModel = (
+  element: XsdElementDecl,
+  options: XsdElementSummaryOptions,
 ): SchemaSummaryNode => {
+  const { model, state, activeTypePath, depth, required, order, kind } = options;
+  const resolved = resolveXsdElement(model, element);
+  const declaration = resolved.declaration;
   if (!canAddNode(state, depth)) {
-    return warningNode(['xsd', element.name], element.name, 'Summary truncated for safety.', order);
+    return warningNode(['xsd', declaration.name], declaration.name, 'Summary truncated for safety.', order);
   }
 
-  const typeName = normalizeXsdType(String(element.type ?? inlineTypeName(element.name)));
-  const minOccurs = element.minOccurs ?? '1';
-  const maxOccurs = element.maxOccurs ?? '1';
-  const constraints = [
-    constraint('minOccurs', 'min', minOccurs),
-    constraint('maxOccurs', 'max', maxOccurs),
-    ...xsdSimpleTypeConstraints(simpleTypes.get(typeName) ?? ''),
+  const typeName = normalizeTypeName(declaration.typeName ?? 'xs:string');
+  const complexType = model.complexTypes.get(typeName);
+  const simpleType = model.simpleTypes.get(typeName);
+  const constraints: SchemaConstraint[] = [
+    constraint('minOccurs', 'min', String(element.minOccurs)),
+    constraint('maxOccurs', 'max', formatMaxOccurs(element.maxOccurs)),
   ];
-  const sourceRange = rangeFromOffset(schemaText, element.start, element.length);
-  const typeBlock = element.block.includes(':complexType') ? element.block : complexTypes.get(typeName);
-  const container = typeBlock?.includes(':choice')
-    ? 'choice'
-    : typeBlock?.includes(':all')
-      ? 'all'
-      : typeBlock?.includes(':sequence')
-        ? 'sequence'
-        : undefined;
-  if (container) {
-    constraints.push(constraint('container', container));
+
+  if (element.refName) {
+    constraints.push(constraint('ref', 'ref', element.refName));
+  }
+  if (resolved.missingRef) {
+    constraints.push(constraint('missingRef', 'missing ref', resolved.missingRef));
+  }
+  if (simpleType) {
+    constraints.push(...xsdSimpleTypeConstraintsFromModel(simpleType));
+  }
+  if (complexType?.simpleContent) {
+    const baseSimpleType = model.simpleTypes.get(normalizeTypeName(complexType.simpleContent.baseType));
+    if (baseSimpleType) {
+      constraints.push(...xsdSimpleTypeConstraintsFromModel(baseSimpleType));
+    }
+    constraints.push(constraint('simpleContent', 'text base', complexType.simpleContent.baseType));
+  }
+  if (complexType?.complexContent) {
+    constraints.push(
+      constraint('derivation', complexType.complexContent.derivation, complexType.complexContent.baseType),
+    );
   }
 
-  const namedComplexType = element.type && complexTypes.has(typeName) ? typeName : undefined;
-  const cycleStart = namedComplexType ? activeTypePath.indexOf(namedComplexType) : -1;
-  if (typeBlock && namedComplexType && cycleStart >= 0) {
-    const cyclePath = [...activeTypePath.slice(cycleStart), namedComplexType].join(' -> ');
-    return node({
-      id: `xsd-${element.name}-${element.start}-recursive`,
-      name: element.name,
-      kind,
-      dataType: typeName,
-      required,
-      order,
-      constraints: [
-        ...constraints,
-        constraint('recursive', 'recursive ref', typeName),
-        constraint('cycle', 'cycle', cyclePath),
-      ],
-      children: [],
-      sourceRange,
-      warnings: [`Recursive reference to ${typeName}.`],
-    });
+  if (complexType) {
+    const cycleStart = activeTypePath.indexOf(complexType.name);
+    if (cycleStart >= 0) {
+      const cyclePath = [...activeTypePath.slice(cycleStart), complexType.name].join(' -> ');
+      return node({
+        id: xsdNodeId('element', element, order, 'recursive'),
+        name: declaration.name,
+        kind,
+        dataType: typeName,
+        required,
+        order,
+        constraints: [
+          ...constraints,
+          constraint('recursive', 'recursive ref', typeName),
+          constraint('cycle', 'cycle', cyclePath),
+        ],
+        children: [],
+        sourceRange: xsdSourceRange(model, element),
+        warnings: [`Recursive reference to ${typeName}.`],
+      });
+    }
   }
 
-  const children: SchemaSummaryNode[] = [];
-
-  if (typeBlock) {
-    const nextActiveTypePath = namedComplexType ? [...activeTypePath, namedComplexType] : activeTypePath;
-    xsdChildElements(typeBlock, element.start).forEach((child, index) => {
-      children.push(
-        xsdElementNode(
-          child,
-          schemaText,
-          complexTypes,
-          simpleTypes,
-          state,
-          nextActiveTypePath,
-          depth + 1,
-          parseOccurs(child.minOccurs, 1) > 0,
-          index + 1,
-          'field',
-        ),
-      );
-    });
-
-    xsdAttributes(typeBlock, element.start).forEach((attribute, index) => {
-      children.push(
-        node({
-          id: `xsd-${element.name}-attribute-${attribute.name}`,
-          name: `@${attribute.name}`,
-          kind: 'attribute',
-          dataType: normalizeXsdType(attribute.type ?? 'xs:string'),
-          required: attribute.use === 'required',
-          order: children.length + index + 1,
-          constraints: attribute.use ? [constraint('use', 'use', attribute.use)] : [],
-          children: [],
-          sourceRange: rangeFromOffset(schemaText, attribute.start, attribute.length),
-        }),
-      );
-    });
-  }
+  const children = complexType
+    ? xsdComplexTypeChildren(complexType, {
+        model,
+        state,
+        activeTypePath: [...activeTypePath, complexType.name],
+        depth: depth + 1,
+      })
+    : [];
 
   return node({
-    id: `xsd-${element.name}-${element.start}`,
-    name: element.name,
+    id: xsdNodeId('element', element, order),
+    name: declaration.name,
     kind,
     dataType: typeName,
     required,
     order,
     constraints,
     children,
-    sourceRange,
+    sourceRange: xsdSourceRange(model, element),
+    warnings: resolved.missingRef ? [`Missing XSD element reference ${resolved.missingRef}.`] : undefined,
   });
 };
 
-const collectNamedBlocks = (schemaText: string, tagName: string) => {
-  const blocks = new Map<string, string>();
-  const pattern = new RegExp(`<(?:xs|xsd):${tagName}\\b([^>]*)>`, 'gi');
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(schemaText))) {
-    const name = xmlAttribute(match[1], 'name');
-    const end = findClosingTagOffset(schemaText, match.index, tagName);
-    if (name && end !== undefined) {
-      blocks.set(normalizeXsdType(name), schemaText.slice(match.index, end));
-    }
-  }
-  return blocks;
-};
+const xsdComplexTypeChildren = (
+  complexType: XsdComplexType,
+  options: XsdComplexChildrenOptions,
+): SchemaSummaryNode[] => {
+  const children: SchemaSummaryNode[] = [];
 
-const firstTopLevelElement = (schemaText: string): XsdElementMatch | undefined => {
-  const match = /<(?:xs|xsd):element\b([^>]*)>/i.exec(schemaText);
-  if (!match) {
-    return undefined;
-  }
-  const name = xmlAttribute(match[1], 'name');
-  if (!name) {
-    return undefined;
-  }
-  const end = findClosingTagOffset(schemaText, match.index, 'element') ?? match.index + match[0].length;
-  return {
-    name,
-    type: xmlAttribute(match[1], 'type'),
-    minOccurs: xmlAttribute(match[1], 'minOccurs'),
-    maxOccurs: xmlAttribute(match[1], 'maxOccurs'),
-    block: schemaText.slice(match.index, end),
-    start: match.index,
-    length: end - match.index,
-  };
-};
+  if (complexType.complexContent) {
+    const content = complexType.complexContent;
+    const baseType = options.model.complexTypes.get(normalizeTypeName(content.baseType));
+    if (content.derivation === 'extension' && baseType) {
+      const baseIsRecursive = options.activeTypePath.includes(baseType.name);
+      children.push(
+        ...(baseIsRecursive
+          ? [xsdRecursiveTypeNode(baseType.name, content, children.length + 1, options)]
+          : xsdComplexTypeChildren(baseType, {
+              ...options,
+              activeTypePath: [...options.activeTypePath, baseType.name],
+            })),
+      );
+    } else if (content.derivation === 'extension' && !baseType && !isBuiltinXsdType(content.baseType)) {
+      children.push(xsdMissingTypeNode(content.baseType, content, children.length + 1));
+    }
 
-const xsdChildElements = (block: string, parentStart: number): XsdElementMatch[] => {
-  const children: XsdElementMatch[] = [];
-  const pattern = /<(?:xs|xsd):element\b([^>]*)\/?>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(block))) {
-    if (match.index === 0) {
-      continue;
+    if (content.group) {
+      children.push(...xsdParticleGroupChildren(content.group, { ...options, orderOffset: children.length }));
     }
-    const name = xmlAttribute(match[1], 'name');
-    if (!name) {
-      continue;
-    }
-    const start = parentStart + match.index;
-    const selfClosing = /\/\s*>$/.test(match[0]);
-    const end = selfClosing
-      ? match.index + match[0].length
-      : (findClosingTagOffset(block, match.index, 'element') ?? match.index + match[0].length);
-    children.push({
-      name,
-      type: xmlAttribute(match[1], 'type'),
-      minOccurs: xmlAttribute(match[1], 'minOccurs'),
-      maxOccurs: xmlAttribute(match[1], 'maxOccurs'),
-      block: block.slice(match.index, end),
-      start,
-      length: end - match.index,
-    });
+    children.push(
+      ...xsdAttributeChildren(content.attributes, content.attributeGroupRefs, {
+        ...options,
+        orderOffset: children.length,
+      }),
+    );
+    return children;
   }
+
+  if (complexType.group) {
+    children.push(...xsdParticleGroupChildren(complexType.group, { ...options, orderOffset: children.length }));
+  }
+  children.push(
+    ...xsdAttributeChildren(complexType.attributes, complexType.attributeGroupRefs, {
+      ...options,
+      orderOffset: children.length,
+    }),
+  );
+
   return children;
 };
 
-const xsdAttributes = (block: string, parentStart: number) => {
-  const attributes: Array<{ name: string; type?: string; use?: string; start: number; length: number }> = [];
-  const pattern = /<(?:xs|xsd):attribute\b([^>]*?)\/?>(?:<\/(?:xs|xsd):attribute>)?/gi;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(block))) {
-    const name = xmlAttribute(match[1], 'name');
-    if (name) {
-      attributes.push({
-        name,
-        type: xmlAttribute(match[1], 'type'),
-        use: xmlAttribute(match[1], 'use'),
-        start: parentStart + match.index,
-        length: match[0].length,
-      });
+const xsdParticleGroupChildren = (
+  group: XsdParticleGroup,
+  options: XsdComplexChildrenOptions & { orderOffset: number; parentRequired?: boolean },
+): SchemaSummaryNode[] => {
+  const children: SchemaSummaryNode[] = [];
+  const groupRequired = (options.parentRequired ?? true) && group.minOccurs > 0;
+  const particles: XsdParticleGroupItem[] = group.particles ?? group.elements.map((element) => ({ kind: 'element' as const, element }));
+
+  for (const particle of particles) {
+    if (particle.kind === 'element') {
+      const childRequired = group.kind === 'choice' ? false : groupRequired && particle.element.minOccurs > 0;
+      children.push(
+        xsdElementNodeFromModel(particle.element, {
+          model: options.model,
+          state: options.state,
+          activeTypePath: options.activeTypePath,
+          depth: options.depth,
+          required: childRequired,
+          order: options.orderOffset + children.length + 1,
+          kind: 'field',
+        }),
+      );
+    } else {
+      const referencedGroup = options.model.groups.get(normalizeTypeName(particle.groupRef.refName));
+      if (!referencedGroup) {
+        children.push(xsdMissingGroupNode(particle.groupRef, options.orderOffset + children.length + 1));
+        continue;
+      }
+
+      children.push(
+        ...xsdParticleGroupChildren(referencedGroup.group, {
+          ...options,
+          orderOffset: options.orderOffset + children.length,
+          parentRequired: groupRequired && particle.groupRef.minOccurs > 0,
+        }),
+      );
     }
   }
-  return attributes;
+
+  return children;
 };
 
-const xsdSimpleTypeConstraints = (block: string): SchemaConstraint[] => {
-  const constraints: SchemaConstraint[] = [];
-  const patterns: Array<[RegExp, string, string]> = [
-    [/<(?:xs|xsd):enumeration\b[^>]*value=["']([^"']+)["']/gi, 'enum', 'enum'],
-    [/<(?:xs|xsd):pattern\b[^>]*value=["']([^"']+)["']/gi, 'pattern', 'pattern'],
-    [/<(?:xs|xsd):minLength\b[^>]*value=["']([^"']+)["']/gi, 'minLength', 'min length'],
-    [/<(?:xs|xsd):maxLength\b[^>]*value=["']([^"']+)["']/gi, 'maxLength', 'max length'],
-    [/<(?:xs|xsd):minInclusive\b[^>]*value=["']([^"']+)["']/gi, 'minInclusive', 'min'],
-    [/<(?:xs|xsd):maxInclusive\b[^>]*value=["']([^"']+)["']/gi, 'maxInclusive', 'max'],
+const xsdAttributeChildren = (
+  attributes: XsdAttributeDecl[],
+  attributeGroupRefs: XsdAttributeGroupRef[],
+  options: XsdComplexChildrenOptions & { orderOffset: number; activeAttributeGroups?: string[] },
+): SchemaSummaryNode[] => {
+  const children = attributes.map((attribute, index) =>
+    xsdAttributeNode(attribute, options.model, options.orderOffset + index + 1),
+  );
+
+  for (const attributeGroupRef of attributeGroupRefs) {
+    const groupName = normalizeTypeName(attributeGroupRef.refName);
+    if (options.activeAttributeGroups?.includes(groupName)) {
+      children.push(xsdMissingAttributeGroupNode(attributeGroupRef, options.orderOffset + children.length + 1, true));
+      continue;
+    }
+
+    const attributeGroup = options.model.attributeGroups.get(groupName);
+    if (!attributeGroup) {
+      children.push(xsdMissingAttributeGroupNode(attributeGroupRef, options.orderOffset + children.length + 1));
+      continue;
+    }
+
+    children.push(
+      ...xsdAttributeChildren(attributeGroup.attributes, attributeGroup.attributeGroupRefs, {
+        ...options,
+        orderOffset: options.orderOffset + children.length,
+        activeAttributeGroups: [...(options.activeAttributeGroups ?? []), groupName],
+      }),
+    );
+  }
+
+  return children;
+};
+
+const xsdAttributeNode = (attribute: XsdAttributeDecl, model: XsdSchemaModel, order: number): SchemaSummaryNode => {
+  const resolved = resolveXsdAttribute(model, attribute);
+  const declaration = resolved.declaration;
+  const typeName = normalizeTypeName(declaration.typeName ?? 'xs:string');
+  const simpleType = model.simpleTypes.get(typeName);
+  const use = attribute.prohibited ? 'prohibited' : attribute.required ? 'required' : 'optional';
+  const constraints = [
+    constraint('use', 'use', use),
+    ...(attribute.refName ? [constraint('ref', 'ref', attribute.refName)] : []),
+    ...(resolved.missingRef ? [constraint('missingRef', 'missing ref', resolved.missingRef)] : []),
+    ...(simpleType ? xsdSimpleTypeConstraintsFromModel(simpleType) : []),
   ];
-  patterns.forEach(([pattern, kind, label]) => {
-    const values: string[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(block))) {
-      values.push(match[1]);
-    }
-    if (values.length > 0) {
-      constraints.push(constraint(kind, label, values.join(', ')));
-    }
+
+  return node({
+    id: xsdNodeId('attribute', attribute, order),
+    name: `@${declaration.name}`,
+    kind: 'attribute',
+    dataType: typeName,
+    required: attribute.required && !attribute.prohibited,
+    order,
+    constraints,
+    children: [],
+    sourceRange: xsdSourceRange(model, attribute),
+    warnings: resolved.missingRef ? [`Missing XSD attribute reference ${resolved.missingRef}.`] : undefined,
   });
-  return constraints;
 };
 
-const findClosingTagOffset = (source: string, start: number, localName: string) => {
-  const closePattern = new RegExp(`</(?:xs|xsd):${localName}>`, 'i');
-  const close = closePattern.exec(source.slice(start));
-  return close ? start + close.index + close[0].length : undefined;
-};
+const xsdSimpleTypeConstraintsFromModel = (simpleType: XsdSimpleType): SchemaConstraint[] =>
+  simpleType.restrictions.map((restriction) => constraint(restriction.kind, xsdRestrictionLabel(restriction.kind), restriction.value));
 
-const xmlAttribute = (source: string, name: string) =>
-  new RegExp(`${escapeRegExp(name)}\\s*=\\s*["']([^"']*)["']`, 'i').exec(source)?.[1];
+const xsdRestrictionLabel = (kind: string) =>
+  ({
+    enumeration: 'enum',
+    pattern: 'pattern',
+    length: 'length',
+    minLength: 'min length',
+    maxLength: 'max length',
+    minInclusive: 'min',
+    maxInclusive: 'max',
+    minExclusive: 'exclusive min',
+    maxExclusive: 'exclusive max',
+    totalDigits: 'total digits',
+    fractionDigits: 'fraction digits',
+  })[kind] ?? kind;
 
-const inlineTypeName = (name: string) => `${name}Type`;
-const normalizeXsdType = (type: string) => {
-  const normalized = type.replace(/^xsd:/, 'xs:');
-  return normalized.startsWith('xs:') ? normalized : normalized.replace(/^[A-Za-z_][\w.-]*:/, '');
-};
-const parseOccurs = (value: string | undefined, fallback: number) => {
-  if (value === undefined || value === 'unbounded') {
-    return value === 'unbounded' ? Number.POSITIVE_INFINITY : fallback;
+const resolveXsdElement = (
+  model: XsdSchemaModel,
+  declaration: XsdElementDecl,
+): { declaration: XsdElementDecl; missingRef?: string } => {
+  if (!declaration.refName) {
+    return { declaration };
   }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+
+  const referenced = model.globalElements.get(normalizeTypeName(declaration.refName));
+  return referenced ? { declaration: referenced } : { declaration, missingRef: declaration.refName };
 };
+
+const resolveXsdAttribute = (
+  model: XsdSchemaModel,
+  attribute: XsdAttributeDecl,
+): { declaration: XsdAttributeDecl; missingRef?: string } => {
+  if (!attribute.refName) {
+    return { declaration: attribute };
+  }
+
+  const referenced = model.attributes.get(normalizeTypeName(attribute.refName));
+  return referenced ? { declaration: referenced } : { declaration: attribute, missingRef: attribute.refName };
+};
+
+const xsdRecursiveTypeNode = (
+  typeName: string,
+  declaration: XsdComplexContent,
+  order: number,
+  options: XsdComplexChildrenOptions,
+): SchemaSummaryNode => {
+  const cycleStart = options.activeTypePath.indexOf(typeName);
+  const cyclePath = [...options.activeTypePath.slice(Math.max(0, cycleStart)), typeName].join(' -> ');
+  return node({
+    id: xsdNodeId('recursive', declaration, order),
+    name: typeName,
+    kind: 'field',
+    dataType: typeName,
+    required: false,
+    order,
+    constraints: [constraint('recursive', 'recursive ref', typeName), constraint('cycle', 'cycle', cyclePath)],
+    warnings: [`Recursive reference to ${typeName}.`],
+  });
+};
+
+const xsdMissingTypeNode = (typeName: string, declaration: XsdComplexContent, order: number): SchemaSummaryNode =>
+  node({
+    id: xsdNodeId('missing-type', declaration, order),
+    name: typeName,
+    kind: 'warning',
+    dataType: 'unknown',
+    required: false,
+    order,
+    constraints: [constraint('missingType', 'missing type', typeName)],
+    warnings: [`XSD type ${typeName} is referenced but not declared in the loaded schema bundle.`],
+  });
+
+const xsdMissingGroupNode = (groupRef: XsdGroupRef, order: number): SchemaSummaryNode =>
+  node({
+    id: xsdNodeId('missing-group', groupRef, order),
+    name: groupRef.refName,
+    kind: 'warning',
+    dataType: 'unknown',
+    required: false,
+    order,
+    constraints: [constraint('missingGroup', 'missing group', groupRef.refName)],
+    warnings: [`XSD group ${groupRef.refName} is referenced but not declared in the loaded schema bundle.`],
+  });
+
+const xsdMissingAttributeGroupNode = (
+  attributeGroupRef: XsdAttributeGroupRef,
+  order: number,
+  recursive = false,
+): SchemaSummaryNode =>
+  node({
+    id: xsdNodeId(recursive ? 'recursive-attribute-group' : 'missing-attribute-group', attributeGroupRef, order),
+    name: attributeGroupRef.refName,
+    kind: 'warning',
+    dataType: 'unknown',
+    required: false,
+    order,
+    constraints: [
+      constraint(recursive ? 'recursive' : 'missingAttributeGroup', recursive ? 'recursive ref' : 'missing group', attributeGroupRef.refName),
+    ],
+    warnings: [
+      recursive
+        ? `Recursive attribute group reference to ${attributeGroupRef.refName}.`
+        : `XSD attribute group ${attributeGroupRef.refName} is referenced but not declared in the loaded schema bundle.`,
+    ],
+  });
+
+const xsdSummaryWarnings = (model: XsdSchemaModel) => {
+  const summarizedFeatureCodes = new Set(['unsupported-group', 'unsupported-complexContent']);
+  const seen = new Set<string>();
+  return model.unsupportedFeatures
+    .filter((feature) => !summarizedFeatureCodes.has(feature.code))
+    .map((feature) => xsdFeatureWarning(feature))
+    .filter((warning) => {
+      if (seen.has(warning)) {
+        return false;
+      }
+      seen.add(warning);
+      return true;
+    });
+};
+
+const xsdFeatureWarning = (feature: XsdUnsupportedFeature) => `${feature.title}: ${feature.message}`;
+
+const xsdSourceRange = (model: XsdSchemaModel, declaration: { sourceId: string; range: TextRange }) =>
+  declaration.sourceId === model.primarySourceId ? declaration.range : undefined;
+
+const xsdNodeId = (prefix: string, declaration: { sourceId: string; range: TextRange }, order: number, suffix = '') =>
+  ['xsd', prefix, declaration.sourceId, declaration.range.startLineNumber, declaration.range.startColumn, order, suffix]
+    .filter((part) => part !== '')
+    .join('-');
+
+const isBuiltinXsdType = (typeName: string) => normalizeTypeName(typeName).startsWith('xs:');
 
 const findOpenApiSchema = (root: unknown): { schema: unknown; path: string[] } | undefined => {
   const queue: Array<{ schema: unknown; path: string[]; depth: number }> = [{ schema: root, path: [], depth: 0 }];
@@ -1373,5 +1547,4 @@ const graphqlKindKeyword = (type: GraphQLNamedType) => {
   return 'type';
 };
 
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export type { SchemaSummary, SchemaSummaryNode } from './types';
