@@ -94,11 +94,11 @@ test('shows recursive XSD summary references without expansion warnings', async 
 
   await expect(page.getByText(/Detected: XSD/i)).toBeVisible();
   await page.getByRole('tab', { name: /summary/i }).click();
-  await expect(page.getByRole('tree').getByText('ShipmentID')).toBeVisible();
-  await expect(page.getByRole('tree').getByText('ChildShipment')).toBeVisible();
+  await expect(page.getByRole('button', { name: /field ShipmentID/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /field ChildShipment/i })).toBeVisible();
   await expect(page.getByText('recursive ref')).toBeVisible();
 
-  await page.getByLabel('Warnings').click();
+  await page.getByRole('checkbox', { name: 'Warnings' }).click();
   await expect(page.getByText('Recursive reference to ShipmentType.')).toBeVisible();
   await expect(page.getByText(/Recursive XSD type ShipmentType was not expanded again/i)).toHaveCount(0);
 });
@@ -149,9 +149,9 @@ test('resolves an XSD include from the Sources tab', async ({ page }) => {
   await expect(page.locator('.source-status.is-resolved', { hasText: 'Resolved' })).toBeVisible();
 
   await page.getByRole('tab', { name: /summary/i }).click();
-  await expect(page.getByRole('tree').getByText('Header')).toBeVisible();
-  await expect(page.getByRole('tree').getByText('EnvelopeVersion')).toBeVisible();
-  await expect(page.getByRole('tree').getByText('Filter')).toBeVisible();
+  await expect(page.getByRole('button', { name: /field Header/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /field EnvelopeVersion/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /field Filter/i })).toBeVisible();
 });
 
 test('prefills a missing XSD import from the detected namespace', async ({ page }) => {
@@ -172,4 +172,38 @@ test('prefills a missing XSD import from the detected namespace', async ({ page 
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue('example-test-common.xsd');
   await expect(page.getByLabel('schemaLocation')).toHaveValue('');
   await expect(page.getByLabel('Namespace', { exact: true })).toHaveValue('https://example.test/common');
+});
+
+test('uses command palette, preview, insights, and diagnostic filters', async ({ page }) => {
+  await page.goto('/');
+  await setEditorText(
+    page,
+    'Schema',
+    JSON.stringify({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      required: ['name'],
+      properties: { name: { type: 'string' }, email: { type: 'string' } },
+      additionalProperties: false,
+    }),
+  );
+  await setEditorText(page, 'Message', '{"email":"joel@example.test"}');
+
+  await expect(page.getByText(/Missing required field: name/i)).toBeVisible();
+  await page.getByLabel('Search diagnostics').fill('required');
+  await page.getByLabel('Diagnostic filters').getByLabel('Group').selectOption('code');
+  await expect(page.getByText(/missing-required-field/i).first()).toBeVisible();
+
+  await page.getByRole('tab', { name: /preview/i }).click();
+  await expect(page.getByText(/JSON structure/i)).toBeVisible();
+
+  await page.getByRole('tab', { name: /insights/i }).click();
+  await expect(page.getByText('Metrics')).toBeVisible();
+  await expect(page.getByText(/Message Coverage/i)).toBeVisible();
+
+  await page.keyboard.press('ControlOrMeta+K');
+  await expect(page.getByRole('dialog', { name: /command palette/i })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /toggle theme/i }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });

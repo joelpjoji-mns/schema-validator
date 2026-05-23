@@ -21,6 +21,7 @@ interface EditorPaneProps {
   tabs?: EditorPaneTab[];
   activeTabId?: string;
   onTabChange?: (tabId: string) => void;
+  editorTheme?: string;
 }
 
 export function EditorPane({
@@ -34,6 +35,7 @@ export function EditorPane({
   tabs,
   activeTabId = 'editor',
   onTabChange,
+  editorTheme = 'vs',
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
@@ -170,7 +172,7 @@ export function EditorPane({
             height="100%"
             language={language}
             value={value}
-            theme="vs"
+            theme={editorTheme}
             onMount={handleMount}
             onChange={(nextValue) => onChange(nextValue ?? '')}
             options={{

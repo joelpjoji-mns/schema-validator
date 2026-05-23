@@ -23,6 +23,8 @@ vi.mock('../validation/registry', async (importOriginal) => {
 const mockedValidateRequest = vi.mocked(validateRequest);
 
 beforeEach(() => {
+  window.localStorage.clear();
+  window.history.replaceState(null, '', '/');
   mockedValidateRequest.mockReset();
   mockedValidateRequest.mockImplementation(async (request) => {
     const actual = await vi.importActual<typeof import('../validation/registry')>('../validation/registry');
@@ -95,6 +97,112 @@ describe('ValidatorWorkbench', () => {
 
     await user.click(screen.getByLabelText('Order'));
     expect(tree.getAllByText('#1').length).toBeGreaterThan(0);
+  });
+
+  it('opens command palette, toggles theme, and switches message preview', async () => {
+    const user = userEvent.setup();
+    render(<ValidatorWorkbench />);
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByRole('dialog', { name: /command palette/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /validate now/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /open message preview/i }));
+    expect(screen.getByText(/No message preview/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /toggle theme/i }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('persists workspace text and restores it on the next mount', async () => {
+    const { unmount } = render(<ValidatorWorkbench />);
+
+    const [schemaEditor, messageEditor] = screen.getAllByRole('textbox');
+    fireEvent.change(schemaEditor, { target: { value: '{"type":"object"}' } });
+    fireEvent.change(messageEditor, { target: { value: '{"name":"Joel"}' } });
+
+    await waitFor(() => expect(window.localStorage.getItem('schema-validator.workspace.v2')).toContain('Joel'));
+    unmount();
+    render(<ValidatorWorkbench />);
+
+    const restoredEditors = screen.getAllByRole('textbox');
+    expect(restoredEditors[0]).toHaveValue('{"type":"object"}');
+    expect(restoredEditors[1]).toHaveValue('{"name":"Joel"}');
+  });
+
+  it('saves and loads named workspace presets', async () => {
+    const user = userEvent.setup();
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Customer payload');
+    render(<ValidatorWorkbench />);
+
+    const [schemaEditor] = screen.getAllByRole('textbox');
+    fireEvent.change(schemaEditor, { target: { value: '{"type":"object","properties":{"id":{"type":"string"}}}' } });
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect((screen.getByRole('combobox', { name: /preset/i }) as HTMLSelectElement).value).toMatch(/^preset-/);
+
+    fireEvent.change(schemaEditor, { target: { value: '{"type":"array"}' } });
+    await user.click(screen.getByRole('button', { name: /^load$/i }));
+
+    expect(screen.getAllByRole('textbox')[0]).toHaveValue('{"type":"object","properties":{"id":{"type":"string"}}}');
+    promptSpy.mockRestore();
+  });
+
+  it('renders message preview, schema insights, and comparison baseline', async () => {
+    const user = userEvent.setup();
+    render(<ValidatorWorkbench />);
+
+    const [schemaEditor, messageEditor] = screen.getAllByRole('textbox');
+    fireEvent.change(schemaEditor, {
+      target: {
+        value: JSON.stringify({
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          type: 'object',
+          required: ['name'],
+          properties: { name: { type: 'string' }, email: { type: 'string' } },
+        }),
+      },
+    });
+    fireEvent.change(messageEditor, { target: { value: '{"name":"Joel"}' } });
+
+    await user.click(screen.getByRole('tab', { name: /preview/i }));
+    expect(screen.getByText(/JSON structure/i)).toBeInTheDocument();
+    expect(screen.getByText(/"name": "Joel"/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /insights/i }));
+    expect(screen.getByText('Metrics')).toBeInTheDocument();
+    expect(screen.getByText(/Message Coverage/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /save baseline/i }));
+    expect(screen.getByText(/baseline saved/i)).toBeInTheDocument();
+  });
+
+  it('searches, filters, groups diagnostics, and shows suggested fixes', async () => {
+    const user = userEvent.setup();
+    render(<ValidatorWorkbench />);
+
+    const [schemaEditor, messageEditor] = screen.getAllByRole('textbox');
+    fireEvent.change(schemaEditor, {
+      target: {
+        value: JSON.stringify({
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          type: 'object',
+          required: ['name'],
+          properties: { name: { type: 'string' } },
+          additionalProperties: false,
+        }),
+      },
+    });
+    fireEvent.change(messageEditor, { target: { value: '{"extra": true}' } });
+
+    await waitFor(() => expect(screen.getByText(/Missing required field: name/i)).toBeInTheDocument());
+  expect(screen.getAllByText(/Fix:/i).length).toBeGreaterThan(0);
+
+    await user.type(screen.getByLabelText(/search diagnostics/i), 'required');
+    expect(screen.getByText(/visible/i)).toBeInTheDocument();
+    const filters = within(screen.getByLabelText(/diagnostic filters/i));
+    await user.selectOptions(filters.getByLabelText(/group/i), 'code');
+    expect(screen.getAllByText(/missing-required-field/i).length).toBeGreaterThan(0);
+    await user.selectOptions(filters.getByLabelText(/severity/i), 'warning');
+    expect(screen.getByText(/No diagnostics match/i)).toBeInTheDocument();
   });
 
   it('renders recursive XSD summary references without the old expansion warning', async () => {

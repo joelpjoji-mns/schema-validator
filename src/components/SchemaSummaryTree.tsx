@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Maximize2, Minimize2, Pin, Search } from 'lucide-react';
 import { useMemo, useState, type CSSProperties } from 'react';
 import type { SchemaSummary, SchemaSummaryNode } from '../validation/introspection';
 
@@ -30,7 +30,15 @@ const defaultOptions: SummaryOptions = {
 export function SchemaSummaryTree({ summary, onNodeSelect }: SchemaSummaryTreeProps) {
   const [options, setOptions] = useState(defaultOptions);
   const allNodeIds = useMemo(() => (summary.root ? collectNodeIds(summary.root) : []), [summary.root]);
+  const flatNodes = useMemo(() => (summary.root ? flattenNodes(summary.root) : []), [summary.root]);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const searchMatchCount = normalizedSearch
+    ? flatNodes.filter((item) => nodeMatchesSearch(item.node, normalizedSearch)).length
+    : 0;
+  const pinnedNodes = flatNodes.filter((item) => pinnedIds.has(item.node.id));
 
   const setOption = (key: keyof SummaryOptions, value: boolean) => {
     setOptions((current) => ({ ...current, [key]: value }));
@@ -38,6 +46,17 @@ export function SchemaSummaryTree({ summary, onNodeSelect }: SchemaSummaryTreePr
 
   const collapseAll = () => setCollapsedIds(new Set(allNodeIds));
   const expandAll = () => setCollapsedIds(new Set());
+  const togglePinned = (nodeId: string) => {
+    setPinnedIds((current) => {
+      const next = new Set(current);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+      return next;
+    });
+  };
 
   if (summary.errors.length > 0) {
     return (
@@ -122,6 +141,30 @@ export function SchemaSummaryTree({ summary, onNodeSelect }: SchemaSummaryTreePr
         </div>
       </div>
 
+      <div className="summary-search-row">
+        <label className="search-field">
+          <Search aria-hidden="true" size={15} />
+          <input
+            value={searchQuery}
+            aria-label="Search summary"
+            placeholder="Search fields, types, constraints"
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+        </label>
+        <span>{normalizedSearch ? `${searchMatchCount} matches` : `${pinnedNodes.length} pinned`}</span>
+      </div>
+
+      {pinnedNodes.length > 0 ? (
+        <div className="summary-pins" aria-label="Pinned summary nodes">
+          {pinnedNodes.map(({ node }) => (
+            <button key={node.id} type="button" className="summary-pin" onClick={() => onNodeSelect?.(node)}>
+              <Pin aria-hidden="true" size={12} />
+              {node.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {options.showWarnings && summary.warnings.length > 0 ? (
         <div className="summary-warnings">
           {summary.warnings.map((warning) => (
@@ -139,6 +182,9 @@ export function SchemaSummaryTree({ summary, onNodeSelect }: SchemaSummaryTreePr
           collapsedIds={collapsedIds}
           setCollapsedIds={setCollapsedIds}
           onNodeSelect={onNodeSelect}
+          searchQuery={normalizedSearch}
+          pinnedIds={pinnedIds}
+          onTogglePinned={togglePinned}
         />
       </div>
     </div>
@@ -153,6 +199,9 @@ interface SummaryNodeRowProps {
   collapsedIds: Set<string>;
   setCollapsedIds: (next: Set<string>) => void;
   onNodeSelect?: (node: SchemaSummaryNode) => void;
+  searchQuery: string;
+  pinnedIds: Set<string>;
+  onTogglePinned: (nodeId: string) => void;
 }
 
 function SummaryNodeRow({
@@ -163,8 +212,11 @@ function SummaryNodeRow({
   collapsedIds,
   setCollapsedIds,
   onNodeSelect,
+  searchQuery,
+  pinnedIds,
+  onTogglePinned,
 }: SummaryNodeRowProps) {
-  const visibleChildren = node.children.filter((child) => shouldShowNode(child, options));
+  const visibleChildren = node.children.filter((child) => shouldShowNode(child, options) && nodeTreeMatches(child, searchQuery));
   const collapsed = collapsedIds.has(node.id);
   const hasChildren = visibleChildren.length > 0;
   const connectorClass = depth === 0 ? 'is-root' : isLast ? 'is-last' : 'is-branch';
@@ -174,7 +226,7 @@ function SummaryNodeRow({
     (item) => !['ref', 'default', 'deprecated', 'recursive', 'cycle'].includes(item.kind),
   );
 
-  if (!shouldShowNode(node, options) && depth > 0) {
+  if ((!shouldShowNode(node, options) || !nodeTreeMatches(node, searchQuery)) && depth > 0) {
     return null;
   }
 
@@ -196,6 +248,8 @@ function SummaryNodeRow({
       toggleCollapsed();
     }
   };
+  const isSearchMatch = Boolean(searchQuery) && nodeMatchesSearch(node, searchQuery);
+  const isPinned = pinnedIds.has(node.id);
 
   return (
     <div
@@ -203,38 +257,49 @@ function SummaryNodeRow({
       aria-expanded={hasChildren ? !collapsed : undefined}
       style={{ '--tree-depth': depth } as CSSProperties}
     >
-      <button
-        type="button"
-        className={`schema-tree-row kind-${node.kind} ${hasChildren || node.sourceRange ? 'is-interactive' : ''}`}
-        onClick={activateNode}
-      >
-        <span className={`tree-connector ${connectorClass}`} aria-hidden="true" />
-        <span className="tree-toggle" aria-hidden="true">
-          {hasChildren ? collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} /> : null}
-        </span>
-        <span className={`tree-kind kind-${node.kind}`}>{node.kind === 'root' ? 'schema' : node.kind}</span>
-        <span className="tree-name">{node.name}</span>
-        {options.showOrder && node.order !== undefined ? (
-          <span className="tree-badge is-order">#{node.order}</span>
-        ) : null}
-        {options.showTypes ? <span className="tree-badge is-type">{node.dataType}</span> : null}
-        <span className={`tree-badge ${node.required ? 'is-required' : 'is-optional'}`}>
-          {node.required ? 'mandatory' : 'optional'}
-        </span>
-        {recursiveConstraint ? (
-          <span className="tree-badge is-recursive" title={cycleConstraint?.value}>
-            recursive ref
+      <div className={`schema-tree-row kind-${node.kind} ${isSearchMatch ? 'is-search-match' : ''}`}>
+        <button
+          type="button"
+          className={`tree-main-button ${hasChildren || node.sourceRange ? 'is-interactive' : ''}`}
+          onClick={activateNode}
+        >
+          <span className={`tree-connector ${connectorClass}`} aria-hidden="true" />
+          <span className="tree-toggle" aria-hidden="true">
+            {hasChildren ? collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} /> : null}
           </span>
-        ) : null}
-        {options.showLimits
-          ? limitConstraints.slice(0, 4).map((item) => (
-              <span key={`${node.id}-${item.kind}-${item.value}`} className="tree-badge is-limit">
-                {item.label}
-                {item.value ? `: ${item.value}` : ''}
-              </span>
-            ))
-          : null}
-      </button>
+          <span className={`tree-kind kind-${node.kind}`}>{node.kind === 'root' ? 'schema' : node.kind}</span>
+          <span className="tree-name">{node.name}</span>
+          {options.showOrder && node.order !== undefined ? (
+            <span className="tree-badge is-order">#{node.order}</span>
+          ) : null}
+          {options.showTypes ? <span className="tree-badge is-type">{node.dataType}</span> : null}
+          <span className={`tree-badge ${node.required ? 'is-required' : 'is-optional'}`}>
+            {node.required ? 'mandatory' : 'optional'}
+          </span>
+          {recursiveConstraint ? (
+            <span className="tree-badge is-recursive" title={cycleConstraint?.value}>
+              recursive ref
+            </span>
+          ) : null}
+          {options.showLimits
+            ? limitConstraints.slice(0, 4).map((item) => (
+                <span key={`${node.id}-${item.kind}-${item.value}`} className="tree-badge is-limit">
+                  {item.label}
+                  {item.value ? `: ${item.value}` : ''}
+                </span>
+              ))
+            : null}
+        </button>
+        <button
+          type="button"
+          className={`tree-pin-button ${isPinned ? 'is-pinned' : ''}`}
+          title={isPinned ? 'Unpin field' : 'Pin field'}
+          onClick={() => onTogglePinned(node.id)}
+        >
+          <Pin aria-hidden="true" size={13} />
+          <span className="sr-only">{isPinned ? 'Unpin' : 'Pin'} {node.name}</span>
+        </button>
+      </div>
       {options.showDescriptions && node.description ? <p className="tree-description">{node.description}</p> : null}
       {options.showWarnings && node.warnings?.length ? (
         <div className="tree-warning-row">
@@ -254,6 +319,9 @@ function SummaryNodeRow({
               collapsedIds={collapsedIds}
               setCollapsedIds={setCollapsedIds}
               onNodeSelect={onNodeSelect}
+              searchQuery={searchQuery}
+              pinnedIds={pinnedIds}
+              onTogglePinned={onTogglePinned}
             />
           ))
         : null}
@@ -295,3 +363,29 @@ const shouldShowNode = (node: SchemaSummaryNode, options: SummaryOptions) => {
 };
 
 const collectNodeIds = (node: SchemaSummaryNode): string[] => [node.id, ...node.children.flatMap(collectNodeIds)];
+const flattenNodes = (node: SchemaSummaryNode): Array<{ node: SchemaSummaryNode; depth: number }> => [
+  { node, depth: 0 },
+  ...node.children.flatMap((child) => flattenNodesWithDepth(child, 1)),
+];
+
+const flattenNodesWithDepth = (node: SchemaSummaryNode, depth: number): Array<{ node: SchemaSummaryNode; depth: number }> => [
+  { node, depth },
+  ...node.children.flatMap((child) => flattenNodesWithDepth(child, depth + 1)),
+];
+
+const nodeTreeMatches = (node: SchemaSummaryNode, query: string): boolean =>
+  !query || nodeMatchesSearch(node, query) || node.children.some((child) => nodeTreeMatches(child, query));
+
+const nodeMatchesSearch = (node: SchemaSummaryNode, query: string) =>
+  [
+    node.name,
+    node.kind,
+    node.dataType,
+    node.description,
+    ...(node.warnings ?? []),
+    ...node.constraints.flatMap((constraint) => [constraint.kind, constraint.label, constraint.value]),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .includes(query);
