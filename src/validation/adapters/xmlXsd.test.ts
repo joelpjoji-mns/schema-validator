@@ -206,6 +206,46 @@ describe('XML/XSD lite edge cases', () => {
     expect(result.issues.map((issue) => issue.code)).toContain('unexpected-xml-element');
   });
 
+  it('explains a required sequence element missing before the next XML element', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ShipmentNotification">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="HeaderType" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="MessageId" type="xs:string" />
+      <xs:element name="CreatedTimestamp" type="xs:dateTime" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+      messageText: `<ShipmentNotification>
+  <Header>
+    <CreatedTimestamp>2026-05-23T18:30:00Z</CreatedTimestamp>
+  </Header>
+</ShipmentNotification>`,
+    });
+
+    expect(result.ok).toBe(false);
+    const issue = result.issues.find((item) => item.title.includes('MessageId'));
+    expect(issue).toMatchObject({
+      code: 'missing-xml-element',
+      title: 'MessageId is missing before CreatedTimestamp',
+      path: '/ShipmentNotification/Header/MessageId',
+      expected: '<MessageId> before <CreatedTimestamp>',
+      actual: '<CreatedTimestamp>',
+    });
+    expect(issue?.message).toContain('<MessageId> is required before <CreatedTimestamp>');
+    expect(issue?.hint).toContain('Add <MessageId>');
+  });
+
   it('validates root-level choice cardinality', async () => {
     const schemaText = `
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -452,8 +492,8 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('unexpected-xml-element');
-    expect(result.issues.map((issue) => issue.message).join('\n')).toContain('Quantity');
+    expect(result.issues.map((issue) => issue.code)).toContain('missing-xml-element');
+    expect(result.issues.map((issue) => issue.title).join('\n')).toContain('Quantity');
   });
 
   it('enforces simpleType enum, pattern, length, and numeric restrictions', async () => {

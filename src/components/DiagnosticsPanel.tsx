@@ -14,7 +14,10 @@ export function DiagnosticsPanel({ result, activeIssueId, onIssueSelect }: Diagn
   const [severity, setSeverity] = useState<ValidationSeverity | 'all'>('all');
   const [groupBy, setGroupBy] = useState<'none' | 'severity' | 'code' | 'source' | 'path'>('none');
   const report = result ? JSON.stringify(result, null, 2) : '';
-  const issueGroups = useMemo(() => buildIssueGroups(result?.issues ?? [], query, severity, groupBy), [groupBy, query, result, severity]);
+  const issueGroups = useMemo(
+    () => buildIssueGroups(result?.issues ?? [], query, severity, groupBy),
+    [groupBy, query, result, severity],
+  );
   const visibleIssueCount = issueGroups.reduce((total, group) => total + group.items.length, 0);
 
   const downloadReport = () => {
@@ -69,7 +72,10 @@ export function DiagnosticsPanel({ result, activeIssueId, onIssueSelect }: Diagn
         <div className="filter-row">
           <label>
             <span>Severity</span>
-            <select value={severity} onChange={(event) => setSeverity(event.target.value as ValidationSeverity | 'all')}>
+            <select
+              value={severity}
+              onChange={(event) => setSeverity(event.target.value as ValidationSeverity | 'all')}
+            >
               <option value="all">All</option>
               <option value="error">Errors</option>
               <option value="warning">Warnings</option>
@@ -127,6 +133,13 @@ export function DiagnosticsPanel({ result, activeIssueId, onIssueSelect }: Diagn
                     {relatedCount > 1 ? <em>{relatedCount} similar</em> : null}
                   </strong>
                   <span>{issue.message}</span>
+                  {issue.expected || issue.actual ? (
+                    <span className="issue-detail-row" aria-label="Diagnostic expected and actual values">
+                      {issue.expected ? <span className="issue-chip is-expected">Expected: {issue.expected}</span> : null}
+                      {issue.actual ? <span className="issue-chip is-actual">Actual: {issue.actual}</span> : null}
+                    </span>
+                  ) : null}
+                  {issue.hint ? <span className="issue-hint">Hint: {issue.hint}</span> : null}
                   <span className="issue-meta">
                     {issue.code}
                     {issue.schemaSourceLabel ? ` / ${issue.schemaSourceLabel}` : ''}
@@ -180,7 +193,14 @@ const buildIssueGroups = (
 const dedupeIssues = (issues: ValidationIssue[]): IssueGroupItem[] => {
   const groups = new Map<string, IssueGroupItem>();
   for (const issue of issues) {
-    const key = [issue.code, issue.title, issue.path ?? '', issue.schemaSourceLabel ?? '', issue.message].join('|');
+    const key = [
+      issue.code,
+      issue.title,
+      parentPath(issue.path) ?? '',
+      issue.schemaSourceLabel ?? '',
+      issue.expected ?? '',
+      issue.actual ?? '',
+    ].join('|');
     const existing = groups.get(key);
     if (existing) {
       existing.relatedCount += 1;
@@ -189,6 +209,11 @@ const dedupeIssues = (issues: ValidationIssue[]): IssueGroupItem[] => {
     }
   }
   return [...groups.values()];
+};
+
+const parentPath = (path: string | undefined) => {
+  const parts = path?.split('/').filter(Boolean) ?? [];
+  return parts.length > 1 ? `/${parts.slice(0, -1).join('/')}` : path;
 };
 
 const issueMatchesQuery = (issue: ValidationIssue, query: string) => {

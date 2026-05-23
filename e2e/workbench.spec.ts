@@ -103,6 +103,43 @@ test('shows recursive XSD summary references without expansion warnings', async 
   await expect(page.getByText(/Recursive XSD type ShipmentType was not expanded again/i)).toHaveCount(0);
 });
 
+test('explains missing required XML sequence fields before the next element', async ({ page }) => {
+  await page.goto('/');
+  await setEditorText(
+    page,
+    'Schema',
+    `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ShipmentNotification">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="HeaderType" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="MessageId" type="xs:string" />
+      <xs:element name="CreatedTimestamp" type="xs:dateTime" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+  );
+  await setEditorText(
+    page,
+    'Message',
+    `<ShipmentNotification>
+  <Header>
+    <CreatedTimestamp>2026-05-23T18:30:00Z</CreatedTimestamp>
+  </Header>
+</ShipmentNotification>`,
+  );
+
+  await expect(page.getByText('MessageId is missing before CreatedTimestamp')).toBeVisible();
+  await expect(page.getByText('Expected: <MessageId> before <CreatedTimestamp>')).toBeVisible();
+  await expect(page.getByText('Actual: <CreatedTimestamp>')).toBeVisible();
+  await expect(page.getByText(/Hint: Add <MessageId>/)).toBeVisible();
+});
+
 test('resolves an XSD include from the Sources tab', async ({ page }) => {
   await page.goto('/');
   await setEditorText(

@@ -984,6 +984,38 @@ select {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.issue-copy .issue-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.issue-copy .issue-chip {
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.issue-chip.is-expected {
+  color: #0f3f2d !important;
+  background: #dff6ed;
+}
+
+.issue-chip.is-actual {
+  color: #9f1239 !important;
+  background: #ffe4e6;
+}
+
+.issue-copy .issue-hint {
+  border-left: 3px solid #f4c152;
+  padding-left: 8px;
+  color: #713f12 !important;
+}
+
 .power-row,
 .capability-strip,
 .history-dock {

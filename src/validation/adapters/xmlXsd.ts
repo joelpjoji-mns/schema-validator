@@ -1,6 +1,7 @@
 import { XMLValidator } from 'fast-xml-parser';
 import { makeIssue, rangeFromLineColumn, summarizeIssues, wholeDocumentRange } from '../textRanges';
 import type { ValidationIssue, ValidationRequest, ValidationResult, ValidatorAdapter } from '../types';
+import { enrichXmllintIssues, type XmllintIssueEntry } from './xsd/enrichDiagnostics';
 import { parseXsdModel } from './xsd/parseXsdModel';
 import { validateXmlAgainstXsdModel } from './xsd/validateXsdModel';
 import {
@@ -165,7 +166,24 @@ const issuesFromXmllint = (result: XmllintEngineResult, request: ValidationReque
   }
 
   const errors = result.errors.length > 0 ? result.errors : [fallbackEngineError(result.rawOutput)];
-  return errors.map((error) => issueFromXmllintError(error, result.files, request));
+  const entries: XmllintIssueEntry[] = errors.map((error) => ({
+    issue: issueFromXmllintError(error, result.files, request),
+    rawMessage: error.message || error.rawMessage,
+  }));
+  const parsedModel = parseXsdModel({
+    primary: {
+      id: 'primary-schema',
+      label: 'Main schema',
+      text: request.schemaText,
+    },
+    relatedSchemas: request.relatedSchemas,
+  });
+
+  return enrichXmllintIssues({
+    issues: entries,
+    request,
+    model: parsedModel.ok ? parsedModel.model : undefined,
+  });
 };
 
 const fallbackEngineError = (rawOutput: string): XmllintEngineError => ({
