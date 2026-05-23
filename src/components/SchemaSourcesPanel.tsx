@@ -116,7 +116,9 @@ export function SchemaSourcesPanel({
     <div className="schema-sources">
       <div className="sources-toolbar">
         <div className="sources-stats">
-          <strong>{sources.length} source{sources.length === 1 ? '' : 's'}</strong>
+          <strong>
+            {sources.length} source{sources.length === 1 ? '' : 's'}
+          </strong>
           <span>{references.filter((reference) => reference.resolved).length} resolved</span>
           <span>{references.filter((reference) => !reference.resolved).length} missing</span>
         </div>
@@ -163,7 +165,11 @@ export function SchemaSourcesPanel({
           <div className="sources-reference-list" role="list">
             {references.length === 0 ? <div className="sources-empty">No include or import references.</div> : null}
             {references.map((reference, index) => (
-              <div key={`${reference.kind}-${reference.schemaLocation ?? reference.namespace ?? index}`} className="source-reference" role="listitem">
+              <div
+                key={`${reference.kind}-${reference.schemaLocation ?? reference.namespace ?? index}`}
+                className="source-reference"
+                role="listitem"
+              >
                 <span className={`source-status ${reference.resolved ? 'is-resolved' : 'is-missing'}`}>
                   {reference.resolved ? 'Resolved' : 'Missing'}
                 </span>
@@ -221,7 +227,12 @@ export function SchemaSourcesPanel({
                     onChange={(event) => onUpdateSource(selectedSource.id, { namespace: event.target.value })}
                   />
                 </label>
-                <button type="button" className="icon-button danger-button" title="Remove source" onClick={() => onRemoveSource(selectedSource.id)}>
+                <button
+                  type="button"
+                  className="icon-button danger-button"
+                  title="Remove source"
+                  onClick={() => onRemoveSource(selectedSource.id)}
+                >
                   <Trash2 aria-hidden="true" size={16} />
                   <span className="sr-only">Remove source</span>
                 </button>
@@ -302,4 +313,5 @@ const readXmlAttribute = (text: string, name: string) => {
 };
 
 const normalizeLocation = (value: string) => value.replace(/\\/g, '/').replace(/^\.\//, '').trim().toLowerCase();
-const basename = (value: string) => normalizeLocation(value).split('/').filter(Boolean).at(-1) ?? normalizeLocation(value);
+const basename = (value: string) =>
+  normalizeLocation(value).split('/').filter(Boolean).at(-1) ?? normalizeLocation(value);

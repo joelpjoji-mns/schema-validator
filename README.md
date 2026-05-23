@@ -2,7 +2,7 @@
 
 A local-first validation workbench for comparing schemas against messages/files with precise diagnostics, editor highlights, and format-specific explanations.
 
-Paste or upload a schema and message, and the workbench revalidates as either editor changes. Late validation results are ignored when newer edits have already triggered another run. The schema editor also detects common schema formats automatically and includes a Summary tab that renders a tree-style hierarchy with ordering, required/optional fields, data types, limits, descriptions, and warnings. For XSD schemas, the Sources tab lets you add or upload related `.xsd` files used by `xs:include` and `xs:import`.
+Paste or upload a schema and message, and the workbench revalidates as either editor changes. Late validation results are ignored when newer edits have already triggered another run. The schema editor also detects common schema formats automatically and includes a Summary tab that renders a tree-style hierarchy; it starts with required and optional fields visible, with ordering, data types, limits, descriptions, and warnings available as toggles. For XSD schemas, the Sources tab lets you add or upload related `.xsd` files used by `xs:include` and `xs:import`.
 
 ## Scripts
 
@@ -20,7 +20,7 @@ The validator is a client-only app. It does not require a Node API, database, ac
 
 Vite is configured with relative asset paths, so the same `dist` output can be served from a domain root or a subfolder.
 
-Because the app is static and browser-only, XSD `schemaLocation` values are not fetched automatically from local paths or remote URLs. Add each related XSD in the Sources tab, set its `schemaLocation` or namespace, and validation resolves the bundle in memory.
+Because the app is static and browser-only, XSD `schemaLocation` values are not fetched automatically from local paths or remote URLs. Add each related XSD in the Sources tab, set its `schemaLocation` or namespace, and validation resolves the bundle in memory through the bundled libxml2/xmllint WebAssembly engine.
 
 ## GitHub Pages
 
@@ -30,7 +30,7 @@ Pushing to `main` runs `.github/workflows/deploy-pages.yml`, builds the static a
 
 ## Supported adapters
 
-The app ships with focused support for JSON Schema, YAML through JSON Schema, XML with a recursive XSD-lite rule mapper and user-supplied XSD include/import sources, OpenAPI examples, GraphQL SDL/operations, Protobuf JSON messages, Avro records, CSV table schemas, TOML through JSON Schema, and key-value rule schemas.
+The app ships with focused support for JSON Schema, YAML through JSON Schema, XML with libxml2/xmllint-backed XSD 1.0 validation and user-supplied XSD include/import sources, OpenAPI examples, GraphQL SDL/operations, Protobuf JSON messages, Avro records, CSV table schemas, TOML through JSON Schema, and key-value rule schemas.
 
 Schema auto-detection currently recognizes XSD, JSON Schema, OpenAPI, GraphQL SDL, Protobuf, Avro, CSV table schemas, and key-value rule schemas. You can still select formats manually when a schema is ambiguous.
 

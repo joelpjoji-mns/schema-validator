@@ -17,8 +17,8 @@ import {
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { EditorPane } from './EditorPane';
 import { FormatSelector } from './FormatSelector';
-import { SchemaSummaryTree } from './SchemaSummaryTree';
 import { SchemaSourcesPanel } from './SchemaSourcesPanel';
+import { SchemaSummaryTree } from './SchemaSummaryTree';
 
 const PRIMARY_SCHEMA_SOURCE_ID = 'primary-schema';
 
@@ -48,8 +48,7 @@ export function ValidatorWorkbench() {
     () =>
       result?.issues
         .filter(
-          (issue) =>
-            issue.schemaRange && (!issue.schemaSourceId || issue.schemaSourceId === PRIMARY_SCHEMA_SOURCE_ID),
+          (issue) => issue.schemaRange && (!issue.schemaSourceId || issue.schemaSourceId === PRIMARY_SCHEMA_SOURCE_ID),
         )
         .map((issue) => ({ ...issue, messageRange: undefined })) ?? [],
     [result],
@@ -57,7 +56,9 @@ export function ValidatorWorkbench() {
   const xsdSourceIssues = useMemo(
     () =>
       result?.issues
-        .filter((issue) => issue.schemaRange && issue.schemaSourceId && issue.schemaSourceId !== PRIMARY_SCHEMA_SOURCE_ID)
+        .filter(
+          (issue) => issue.schemaRange && issue.schemaSourceId && issue.schemaSourceId !== PRIMARY_SCHEMA_SOURCE_ID,
+        )
         .map((issue) => ({ ...issue, messageRange: undefined })) ?? [],
     [result],
   );
@@ -169,9 +170,7 @@ export function ValidatorWorkbench() {
   };
 
   const handleUpdateXsdSource = (sourceId: string, patch: Partial<Omit<RelatedSchemaDocument, 'id'>>) => {
-    setXsdSources((current) =>
-      current.map((source) => (source.id === sourceId ? { ...source, ...patch } : source)),
-    );
+    setXsdSources((current) => current.map((source) => (source.id === sourceId ? { ...source, ...patch } : source)));
   };
 
   const handleRemoveXsdSource = (sourceId: string) => {
@@ -189,7 +188,8 @@ export function ValidatorWorkbench() {
     : schemaDetection.format
       ? `Detected: ${formatLabel(schemaDetection.format)}`
       : 'No schema detected';
-  const primarySchemaIssueActive = !activeIssue?.schemaSourceId || activeIssue.schemaSourceId === PRIMARY_SCHEMA_SOURCE_ID;
+  const primarySchemaIssueActive =
+    !activeIssue?.schemaSourceId || activeIssue.schemaSourceId === PRIMARY_SCHEMA_SOURCE_ID;
   const schemaActiveRange = (primarySchemaIssueActive ? activeIssue?.schemaRange : undefined) ?? summaryRange;
   const selectedSourceActiveRange = !primarySchemaIssueActive ? activeIssue?.schemaRange : undefined;
   const schemaTabs = [
@@ -281,7 +281,8 @@ export function ValidatorWorkbench() {
             onChange={handleSchemaTextChange}
             headingMeta={
               <span className="pane-meta">
-                {schemaSummary.stats.nodes} summary nodes{schemaFormat === 'xsd' ? ` / ${xsdSources.length} sources` : ''}
+                {schemaSummary.stats.nodes} summary nodes
+                {schemaFormat === 'xsd' ? ` / ${xsdSources.length} sources` : ''}
               </span>
             }
             tabs={schemaTabs}

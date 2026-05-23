@@ -41,6 +41,13 @@ test('starts empty, detects XSD, and shows the schema summary tree', async ({ pa
   await page.getByRole('tab', { name: /summary/i }).click();
   await expect(page.getByRole('tree')).toContainText('ShipmentNotification');
   await expect(page.getByRole('tree')).toContainText('Header');
+  await expect(page.getByLabel('Required')).toBeChecked();
+  await expect(page.getByLabel('Optional')).toBeChecked();
+  await expect(page.getByLabel('Types')).not.toBeChecked();
+  await expect(page.getByLabel('Order')).not.toBeChecked();
+  await expect(page.getByRole('tree').getByText(/xs:string/)).toHaveCount(0);
+  await page.getByLabel('Types').check();
+  await expect(page.getByRole('tree').getByText(/xs:string/).first()).toBeVisible();
 });
 
 test('reruns validation after the message changes', async ({ page }) => {
@@ -80,9 +87,13 @@ test('resolves an XSD include from the Sources tab', async ({ page }) => {
   </xs:element>
 </xs:schema>`,
   );
-  await setEditorText(page, 'Message', '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion></Header></ShipmentNotification>');
+  await setEditorText(
+    page,
+    'Message',
+    '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion><Filter>Level2</Filter></Header></ShipmentNotification>',
+  );
 
-  await expect(page.getByText(/Missing XSD include: header-types\.xsd/i)).toBeVisible();
+  await expect(page.getByText(/XSD schema error/i).first()).toBeVisible();
 
   await page.getByRole('tab', { name: /sources/i }).click();
   await page.getByRole('button', { name: /add xsd/i }).click();
@@ -93,11 +104,15 @@ test('resolves an XSD include from the Sources tab', async ({ page }) => {
   <xs:complexType name="HeaderType">
     <xs:sequence>
       <xs:element name="EnvelopeVersion" type="xs:string" />
+      <xs:sequence>
+        <xs:element name="Filter" type="xs:string" />
+      </xs:sequence>
     </xs:sequence>
   </xs:complexType>
 </xs:schema>`,
   );
 
   await expect(page.getByRole('heading', { name: /validation passed/i })).toBeVisible();
+  await expect(page.getByText(/Unsupported nested XSD particle/i)).toHaveCount(0);
   await expect(page.locator('.source-status.is-resolved', { hasText: 'Resolved' })).toBeVisible();
 });

@@ -20,11 +20,11 @@ interface SummaryOptions {
 const defaultOptions: SummaryOptions = {
   showRequired: true,
   showOptional: true,
-  showOrder: true,
-  showTypes: true,
-  showLimits: true,
-  showDescriptions: true,
-  showWarnings: true,
+  showOrder: false,
+  showTypes: false,
+  showLimits: false,
+  showDescriptions: false,
+  showWarnings: false,
 };
 
 export function SchemaSummaryTree({ summary, onNodeSelect }: SchemaSummaryTreeProps) {
@@ -81,33 +81,45 @@ export function SchemaSummaryTree({ summary, onNodeSelect }: SchemaSummaryTreePr
       </div>
 
       <div className="summary-options" aria-label="Schema summary options">
-        <SummaryToggle
-          label="Required"
-          checked={options.showRequired}
-          onChange={(value) => setOption('showRequired', value)}
-        />
-        <SummaryToggle
-          label="Optional"
-          checked={options.showOptional}
-          onChange={(value) => setOption('showOptional', value)}
-        />
-        <SummaryToggle label="Order" checked={options.showOrder} onChange={(value) => setOption('showOrder', value)} />
-        <SummaryToggle label="Types" checked={options.showTypes} onChange={(value) => setOption('showTypes', value)} />
-        <SummaryToggle
-          label="Limits"
-          checked={options.showLimits}
-          onChange={(value) => setOption('showLimits', value)}
-        />
-        <SummaryToggle
-          label="Docs"
-          checked={options.showDescriptions}
-          onChange={(value) => setOption('showDescriptions', value)}
-        />
-        <SummaryToggle
-          label="Warnings"
-          checked={options.showWarnings}
-          onChange={(value) => setOption('showWarnings', value)}
-        />
+        <div className="summary-option-group is-primary">
+          <SummaryToggle
+            label="Required"
+            checked={options.showRequired}
+            onChange={(value) => setOption('showRequired', value)}
+          />
+          <SummaryToggle
+            label="Optional"
+            checked={options.showOptional}
+            onChange={(value) => setOption('showOptional', value)}
+          />
+        </div>
+        <div className="summary-option-group">
+          <SummaryToggle
+            label="Order"
+            checked={options.showOrder}
+            onChange={(value) => setOption('showOrder', value)}
+          />
+          <SummaryToggle
+            label="Types"
+            checked={options.showTypes}
+            onChange={(value) => setOption('showTypes', value)}
+          />
+          <SummaryToggle
+            label="Limits"
+            checked={options.showLimits}
+            onChange={(value) => setOption('showLimits', value)}
+          />
+          <SummaryToggle
+            label="Docs"
+            checked={options.showDescriptions}
+            onChange={(value) => setOption('showDescriptions', value)}
+          />
+          <SummaryToggle
+            label="Warnings"
+            checked={options.showWarnings}
+            onChange={(value) => setOption('showWarnings', value)}
+          />
+        </div>
       </div>
 
       {options.showWarnings && summary.warnings.length > 0 ? (
@@ -155,7 +167,7 @@ function SummaryNodeRow({
   const visibleChildren = node.children.filter((child) => shouldShowNode(child, options));
   const collapsed = collapsedIds.has(node.id);
   const hasChildren = visibleChildren.length > 0;
-  const connector = depth === 0 ? '' : isLast ? '`-- ' : '|-- ';
+  const connectorClass = depth === 0 ? 'is-root' : isLast ? 'is-last' : 'is-branch';
   const limitConstraints = node.constraints.filter((item) => !['ref', 'default', 'deprecated'].includes(item.kind));
 
   if (!shouldShowNode(node, options) && depth > 0) {
@@ -172,20 +184,27 @@ function SummaryNodeRow({
     setCollapsedIds(next);
   };
 
+  const activateNode = () => {
+    if (node.sourceRange) {
+      onNodeSelect?.(node);
+    }
+    if (hasChildren) {
+      toggleCollapsed();
+    }
+  };
+
   return (
-    <div role="treeitem" aria-expanded={hasChildren ? !collapsed : undefined}>
+    <div role="treeitem" aria-expanded={hasChildren ? !collapsed : undefined} style={{ '--tree-depth': depth } as CSSProperties}>
       <button
         type="button"
-        className={`schema-tree-row kind-${node.kind}`}
-        style={{ '--tree-depth': depth } as CSSProperties}
-        onClick={() => (node.sourceRange ? onNodeSelect?.(node) : hasChildren ? toggleCollapsed() : undefined)}
+        className={`schema-tree-row kind-${node.kind} ${hasChildren || node.sourceRange ? 'is-interactive' : ''}`}
+        onClick={activateNode}
       >
-        <span className="tree-connector" aria-hidden="true">
-          {connector}
-        </span>
+        <span className={`tree-connector ${connectorClass}`} aria-hidden="true" />
         <span className="tree-toggle" aria-hidden="true">
           {hasChildren ? collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} /> : null}
         </span>
+        <span className={`tree-kind kind-${node.kind}`}>{node.kind === 'root' ? 'schema' : node.kind}</span>
         <span className="tree-name">{node.name}</span>
         {options.showOrder && node.order !== undefined ? (
           <span className="tree-badge is-order">#{node.order}</span>
@@ -239,7 +258,7 @@ function SummaryToggle({
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="summary-toggle">
+    <label className={`summary-toggle ${checked ? 'is-checked' : ''}`}>
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
       <span>{label}</span>
     </label>

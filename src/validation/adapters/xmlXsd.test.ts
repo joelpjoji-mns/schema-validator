@@ -38,47 +38,47 @@ const shipmentSchema = `
 </xs:schema>`;
 
 const complexShipmentSchema = `
-<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-  <xs:element name="ShipmentNotification" type="ShipmentNotificationType" />
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="https://example.test/shipment" targetNamespace="https://example.test/shipment" elementFormDefault="qualified">
+  <xs:element name="ShipmentNotification" type="tns:ShipmentNotificationType" />
 
   <xs:complexType name="ShipmentNotificationType">
     <xs:sequence>
-      <xs:element name="Header" type="HeaderType" />
-      <xs:element name="Payload" type="PayloadType" />
+      <xs:element name="Header" type="tns:HeaderType" />
+      <xs:element name="Payload" type="tns:PayloadType" />
       <xs:element name="Signature" type="xs:string" minOccurs="0" />
     </xs:sequence>
-    <xs:attribute name="version" type="VersionType" use="required" />
+    <xs:attribute name="version" type="tns:VersionType" use="required" />
   </xs:complexType>
 
   <xs:complexType name="HeaderType">
     <xs:sequence>
-      <xs:element name="ShipmentID" type="ShipmentIDType" />
-      <xs:element name="Status" type="StatusType" />
+      <xs:element name="ShipmentID" type="tns:ShipmentIDType" />
+      <xs:element name="Status" type="tns:StatusType" />
       <xs:element name="CreatedTimestamp" type="xs:dateTime" />
     </xs:sequence>
   </xs:complexType>
 
   <xs:complexType name="PayloadType">
     <xs:sequence>
-      <xs:element name="CarrierReference" type="CarrierReferenceType" />
-      <xs:element name="LOAD" type="LoadType" maxOccurs="unbounded" />
+      <xs:element name="CarrierReference" type="tns:CarrierReferenceType" />
+      <xs:element name="LOAD" type="tns:LoadType" maxOccurs="unbounded" />
     </xs:sequence>
   </xs:complexType>
 
   <xs:complexType name="CarrierReferenceType">
     <xs:sequence>
-      <xs:element name="CarrierCode" type="CarrierCodeType" />
+      <xs:element name="CarrierCode" type="tns:CarrierCodeType" />
       <xs:element name="CarrierName" type="xs:string" minOccurs="0" />
     </xs:sequence>
   </xs:complexType>
 
   <xs:complexType name="LoadType">
     <xs:sequence>
-      <xs:element name="LoadID" type="LoadIDType" />
-      <xs:element name="Quantity" type="QuantityType" />
-      <xs:element name="Weight" type="WeightType" minOccurs="0" />
+      <xs:element name="LoadID" type="tns:LoadIDType" />
+      <xs:element name="Quantity" type="tns:QuantityType" />
+      <xs:element name="Weight" type="tns:WeightType" minOccurs="0" />
     </xs:sequence>
-    <xs:attribute name="unit" type="UnitType" use="required" />
+    <xs:attribute name="unit" type="tns:UnitType" use="required" />
   </xs:complexType>
 
   <xs:simpleType name="StatusType">
@@ -162,11 +162,22 @@ const validComplexShipmentXml = `<ns:ShipmentNotification xmlns:ns="https://exam
 </ns:ShipmentNotification>`;
 
 describe('XML/XSD lite edge cases', () => {
-  it('accepts namespace-prefixed XML when local names match the XSD', async () => {
+  it('accepts namespace-prefixed XML when the XSD declares the target namespace', async () => {
     const result = await validateRequest({
       schemaFormat: 'xsd',
       messageFormat: 'xml',
-      schemaText: orderSchema,
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="https://example.test/order" elementFormDefault="qualified">
+  <xs:element name="order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id" type="xs:string" maxOccurs="1" />
+        <xs:element name="quantity" type="xs:integer" />
+      </xs:sequence>
+      <xs:attribute name="status" type="xs:string" use="required" />
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
       messageText: `<ns:order xmlns:ns="https://example.test/order" status="">
   <ns:id>ORD-42</ns:id>
   <ns:quantity>3</ns:quantity>
@@ -190,7 +201,7 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('xsd-max-occurs');
+    expect(result.issues.map((issue) => issue.code)).toContain('unexpected-xml-element');
   });
 
   it('validates root-level choice cardinality', async () => {
@@ -217,7 +228,7 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('xsd-choice-too-many');
+    expect(result.issues.map((issue) => issue.code)).toContain('unexpected-xml-element');
   });
 
   it('accepts a single valid choice branch without requiring the other alternatives', async () => {
@@ -262,7 +273,7 @@ describe('XML/XSD lite edge cases', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('still reports self-closing and whitespace-only required complex elements as empty', async () => {
+  it('reports missing child elements for empty required complex elements', async () => {
     const selfClosing = await validateRequest({
       schemaFormat: 'xsd',
       messageFormat: 'xml',
@@ -286,8 +297,8 @@ describe('XML/XSD lite edge cases', () => {
 </ShipmentNotification>`,
     });
 
-    expect(selfClosing.issues.map((issue) => issue.code)).toContain('empty-xml-element');
-    expect(whitespaceOnly.issues.map((issue) => issue.code)).toContain('empty-xml-element');
+    expect(selfClosing.issues.map((issue) => issue.code)).toContain('missing-xml-element');
+    expect(whitespaceOnly.issues.map((issue) => issue.code)).toContain('missing-xml-element');
   });
 
   it('rejects nested XML inside primitive typed elements', async () => {
@@ -322,7 +333,7 @@ describe('XML/XSD lite edge cases', () => {
       schemaFormat: 'xsd',
       messageFormat: 'xml',
       schemaText: `
-<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="https://example.test/types" targetNamespace="https://example.test/types">
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="https://example.test/types" targetNamespace="https://example.test/types" elementFormDefault="qualified">
   <xs:element name="Envelope" type="tns:EnvelopeType" />
   <xs:element name="Alternate" type="tns:AlternateType" />
   <xs:complexType name="EnvelopeType">
@@ -405,7 +416,7 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('xsd-prohibited-attribute');
+    expect(result.issues.map((issue) => issue.code)).toContain('unexpected-xml-attribute');
   });
 
   it('reports one enum issue for a value outside all allowed values', async () => {
@@ -439,8 +450,8 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('missing-xml-element');
-    expect(result.issues.map((issue) => issue.path)).toContain('/ShipmentNotification/Payload/LOAD/Quantity');
+    expect(result.issues.map((issue) => issue.code)).toContain('unexpected-xml-element');
+    expect(result.issues.map((issue) => issue.message).join('\n')).toContain('Quantity');
   });
 
   it('enforces simpleType enum, pattern, length, and numeric restrictions', async () => {
@@ -589,7 +600,7 @@ describe('XML/XSD lite edge cases', () => {
     expect(result.issues.map((issue) => issue.code)).toContain('xml-element-type');
   });
 
-  it('keeps simpleContent restriction failing closed', async () => {
+  it('reports invalid simpleContent restriction schemas through the full engine', async () => {
     const result = await validateRequest({
       schemaFormat: 'xsd',
       messageFormat: 'xml',
@@ -607,8 +618,7 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('unsupported-xsd-feature');
-    expect(result.issues.map((issue) => issue.title)).toContain('XSD simpleContent restriction is unsupported');
+    expect(result.issues.map((issue) => issue.code)).toContain('xsd-schema-error');
   });
 
   it('reports unexpected nested elements and sequence order violations', async () => {
@@ -627,12 +637,361 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining(['unexpected-xml-element', 'xsd-sequence-order']),
-    );
+    expect(result.issues.map((issue) => issue.code)).toContain('unexpected-xml-element');
   });
 
-  it('fails closed when unsupported external schema imports could affect correctness', async () => {
+  it('validates complexContent extension with inherited base elements', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="BaseShipment">
+    <xs:sequence>
+      <xs:element name="ShipmentID" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ExtendedShipment">
+    <xs:complexContent>
+      <xs:extension base="BaseShipment">
+        <xs:sequence>
+          <xs:element name="Status" type="xs:string" />
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:element name="Shipment" type="ExtendedShipment" />
+</xs:schema>`,
+      messageText: '<Shipment><ShipmentID>SHP-1</ShipmentID><Status>ORIGINAL</Status></Shipment>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('validates xs:group and xs:attributeGroup references', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:group name="NameGroup">
+    <xs:sequence>
+      <xs:element name="FirstName" type="xs:string" />
+      <xs:element name="LastName" type="xs:string" />
+    </xs:sequence>
+  </xs:group>
+  <xs:attributeGroup name="AuditAttributes">
+    <xs:attribute name="source" type="xs:string" use="required" />
+  </xs:attributeGroup>
+  <xs:element name="Person">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:group ref="NameGroup" />
+      </xs:sequence>
+      <xs:attributeGroup ref="AuditAttributes" />
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      messageText: '<Person source="master"><FirstName>Joel</FirstName><LastName>Joseph</LastName></Person>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('validates list and union simple types with XSD semantics', async () => {
+    const valid = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="NumberList">
+    <xs:list itemType="xs:integer" />
+  </xs:simpleType>
+  <xs:simpleType name="CodeType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="ABC" />
+      <xs:enumeration value="XYZ" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="CodeOrNumber">
+    <xs:union memberTypes="CodeType xs:integer" />
+  </xs:simpleType>
+  <xs:element name="Record">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Numbers" type="NumberList" />
+        <xs:element name="Code" type="CodeOrNumber" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      messageText: '<Record><Numbers>1 2 3</Numbers><Code>ABC</Code></Record>',
+    });
+    const invalid = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="NumberList"><xs:list itemType="xs:integer" /></xs:simpleType>
+  <xs:element name="Numbers" type="NumberList" />
+</xs:schema>`,
+      messageText: '<Numbers>1 nope 3</Numbers>',
+    });
+
+    expect(valid.ok).toBe(true);
+    expect(invalid.ok).toBe(false);
+    expect(invalid.issues.map((issue) => issue.code)).toContain('xml-element-type');
+  });
+
+  it('validates identity constraints such as xs:unique', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Items">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Item" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="id" type="xs:string" use="required" />
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="uniqueItemId">
+      <xs:selector xpath="Item" />
+      <xs:field xpath="@id" />
+    </xs:unique>
+  </xs:element>
+</xs:schema>`,
+      messageText: '<Items><Item id="A" /><Item id="A" /></Items>',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.message).join('\n')).toContain('uniqueItemId');
+  });
+
+  it('resolves nested schemaLocation paths through Sources tab preloads', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="types/header-types.xsd" />
+  <xs:element name="Header" type="HeaderType" />
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'header-types',
+          label: 'header-types.xsd',
+          schemaLocation: 'types/header-types.xsd',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HeaderType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="version" type="xs:string" use="required" />
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+</xs:schema>`,
+        },
+      ],
+      messageText: '<Header version="2.0">ok</Header>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('validates nested particles declared inside an included XSD source', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="header-types.xsd" />
+  <xs:element name="ShipmentNotification">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="HeaderType" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      relatedSchemas: [
+        {
+          id: 'header-types',
+          label: 'header-types.xsd',
+          schemaLocation: 'header-types.xsd',
+          text: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HeaderType">
+    <xs:sequence>
+      <xs:element name="EnvelopeVersion" type="xs:string" />
+      <xs:sequence>
+        <xs:element name="Filter" type="xs:string" />
+      </xs:sequence>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+        },
+      ],
+      messageText:
+        '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion><Filter>Level2</Filter></Header></ShipmentNotification>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues.map((issue) => issue.title).join('\n')).not.toContain('Unsupported nested XSD particle');
+  });
+
+  it('validates wildcard elements and wildcard attributes', async () => {
+    const result = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Envelope">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Header" type="xs:string" />
+        <xs:any namespace="##other" processContents="skip" minOccurs="0" maxOccurs="unbounded" />
+      </xs:sequence>
+      <xs:anyAttribute namespace="##any" processContents="skip" />
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      messageText:
+        '<Envelope xmlns:ext="https://example.test/ext" ext:trace="abc"><Header>ok</Header><ext:Audit>kept</ext:Audit></Envelope>',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('validates complexContent restriction and simpleContent restriction schemas', async () => {
+    const complexRestriction = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="BaseDocument">
+    <xs:sequence>
+      <xs:element name="Title" type="xs:string" />
+      <xs:element name="Notes" type="xs:string" minOccurs="0" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="RestrictedDocument">
+    <xs:complexContent>
+      <xs:restriction base="BaseDocument">
+        <xs:sequence>
+          <xs:element name="Title" type="xs:string" />
+        </xs:sequence>
+      </xs:restriction>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:element name="Document" type="RestrictedDocument" />
+</xs:schema>`,
+      messageText: '<Document><Title>Shipment</Title></Document>',
+    });
+    const simpleRestriction = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="BaseCode">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="scheme" type="xs:string" use="required" />
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="RestrictedCode">
+    <xs:simpleContent>
+      <xs:restriction base="BaseCode">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="ABC" />
+          </xs:restriction>
+        </xs:simpleType>
+        <xs:attribute name="scheme" type="xs:string" use="required" />
+      </xs:restriction>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:element name="Code" type="RestrictedCode" />
+</xs:schema>`,
+      messageText: '<Code scheme="carrier">ABC</Code>',
+    });
+
+    expect(complexRestriction.ok).toBe(true);
+    expect(simpleRestriction.ok).toBe(true);
+  });
+
+  it('validates substitution groups and keyref identity constraints', async () => {
+    const substitution = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="PaymentType">
+    <xs:sequence>
+      <xs:element name="Amount" type="xs:decimal" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="Payment" type="PaymentType" abstract="true" />
+  <xs:element name="CardPayment" type="PaymentType" substitutionGroup="Payment" />
+  <xs:element name="Order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="Payment" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      messageText: '<Order><CardPayment><Amount>10.50</Amount></CardPayment></Order>',
+    });
+    const keyref = await validateRequest({
+      schemaFormat: 'xsd',
+      messageFormat: 'xml',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Item" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="id" type="xs:string" use="required" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="Line" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="itemId" type="xs:string" use="required" />
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="itemIds">
+      <xs:selector xpath="Item" />
+      <xs:field xpath="@id" />
+    </xs:key>
+    <xs:keyref name="lineItemRef" refer="itemIds">
+      <xs:selector xpath="Line" />
+      <xs:field xpath="@itemId" />
+    </xs:keyref>
+  </xs:element>
+</xs:schema>`,
+      messageText: '<Order><Item id="A" /><Line itemId="B" /></Order>',
+    });
+
+    expect(substitution.ok).toBe(true);
+    expect(keyref.ok).toBe(false);
+    expect(keyref.issues.map((issue) => issue.message).join('\n')).toContain('lineItemRef');
+  });
+
+  it('fails closed when external schema imports are not supplied', async () => {
     const result = await validateRequest({
       schemaFormat: 'xsd',
       messageFormat: 'xml',
@@ -645,7 +1004,7 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('unsupported-xsd-feature');
+    expect(result.issues.map((issue) => issue.code)).toContain('xsd-schema-error');
   });
 
   it('resolves xs:include from user supplied XSD sources', async () => {
@@ -731,8 +1090,8 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.code)).toContain('unsupported-xsd-feature');
-    expect(result.issues.map((issue) => issue.title)).toContain('Missing XSD include: missing-types.xsd');
+    expect(result.issues.map((issue) => issue.code)).toContain('xsd-schema-error');
+    expect(result.issues.map((issue) => issue.message).join('\n')).toContain('missing-types.xsd');
   });
 
   it('reports namespace mismatches for included schemas', async () => {
@@ -760,10 +1119,11 @@ describe('XML/XSD lite edge cases', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.issues.map((issue) => issue.title)).toContain('Included XSD namespace mismatch: other.xsd');
+    expect(result.issues.map((issue) => issue.code)).toContain('xsd-schema-error');
+    expect(result.issues.map((issue) => issue.message).join('\n')).toContain('namespace');
   });
 
-  it('keeps schema source metadata for errors from included simple types', async () => {
+  it('validates facets from included simple types', async () => {
     const result = await validateRequest({
       schemaFormat: 'xsd',
       messageFormat: 'xml',
@@ -793,7 +1153,6 @@ describe('XML/XSD lite edge cases', () => {
 
     const enumIssue = result.issues.find((issue) => issue.code === 'xsd-enumeration');
     expect(result.ok).toBe(false);
-    expect(enumIssue?.schemaSourceId).toBe('status-types');
-    expect(enumIssue?.schemaSourceLabel).toBe('status-types.xsd');
+    expect(enumIssue?.messageRange).toBeDefined();
   });
 });

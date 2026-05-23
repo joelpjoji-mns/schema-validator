@@ -77,6 +77,24 @@ describe('ValidatorWorkbench', () => {
     expect(screen.getByText('Header')).toBeInTheDocument();
     expect(screen.getByText('Payload')).toBeInTheDocument();
     expect(screen.getAllByText(/mandatory|optional/i).length).toBeGreaterThan(0);
+
+    expect(screen.getByLabelText('Required')).toBeChecked();
+    expect(screen.getByLabelText('Optional')).toBeChecked();
+    expect(screen.getByLabelText('Order')).not.toBeChecked();
+    expect(screen.getByLabelText('Types')).not.toBeChecked();
+    expect(screen.getByLabelText('Limits')).not.toBeChecked();
+    expect(screen.getByLabelText('Docs')).not.toBeChecked();
+    expect(screen.getByLabelText('Warnings')).not.toBeChecked();
+
+    const tree = within(screen.getByRole('tree'));
+    expect(tree.queryByText(/xs:string/)).not.toBeInTheDocument();
+    expect(tree.queryByText('#1')).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Types'));
+    expect(tree.getAllByText(/xs:string/).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByLabelText('Order'));
+    expect(tree.getAllByText('#1').length).toBeGreaterThan(0);
   });
 
   it('reruns validation after message edits', async () => {
@@ -105,7 +123,9 @@ describe('ValidatorWorkbench', () => {
   it('keeps the newest validation result when an older run finishes late', async () => {
     const firstRun = deferred<ValidationResult>();
     const secondRun = deferred<ValidationResult>();
-    mockedValidateRequest.mockImplementationOnce(() => firstRun.promise).mockImplementationOnce(() => secondRun.promise);
+    mockedValidateRequest
+      .mockImplementationOnce(() => firstRun.promise)
+      .mockImplementationOnce(() => secondRun.promise);
 
     render(<ValidatorWorkbench />);
 
@@ -164,11 +184,12 @@ describe('ValidatorWorkbench', () => {
     });
     fireEvent.change(messageEditor, {
       target: {
-        value: '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion></Header></ShipmentNotification>',
+        value:
+          '<ShipmentNotification><Header><EnvelopeVersion>1.0</EnvelopeVersion><Filter>Level2</Filter></Header></ShipmentNotification>',
       },
     });
 
-    await waitFor(() => expect(screen.getByText(/Missing XSD include: header-types\.xsd/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/XSD schema error/i).length).toBeGreaterThan(0));
 
     await user.click(screen.getByRole('tab', { name: /sources/i }));
     await user.click(screen.getByRole('button', { name: /add xsd/i }));
@@ -184,6 +205,9 @@ describe('ValidatorWorkbench', () => {
   <xs:complexType name="HeaderType">
     <xs:sequence>
       <xs:element name="EnvelopeVersion" type="xs:string" />
+      <xs:sequence>
+        <xs:element name="Filter" type="xs:string" />
+      </xs:sequence>
     </xs:sequence>
   </xs:complexType>
 </xs:schema>`,
@@ -191,6 +215,7 @@ describe('ValidatorWorkbench', () => {
     });
 
     await waitFor(() => expect(screen.getByRole('heading', { name: /validation passed/i })).toBeInTheDocument());
+    expect(screen.queryByText(/Unsupported nested XSD particle/i)).not.toBeInTheDocument();
     expect(mockedValidateRequest).toHaveBeenLastCalledWith(
       expect.objectContaining({
         relatedSchemas: [expect.objectContaining({ schemaLocation: 'header-types.xsd' })],
@@ -199,9 +224,7 @@ describe('ValidatorWorkbench', () => {
   });
 
   it('shows a compact upload error when a selected file cannot be read', async () => {
-    const { container } = render(
-      <EditorPane title="Schema" language="xml" value="" issues={[]} onChange={vi.fn()} />,
-    );
+    const { container } = render(<EditorPane title="Schema" language="xml" value="" issues={[]} onChange={vi.fn()} />);
     const input = container.querySelector('input[type="file"]');
     const unreadableFile = {
       name: 'broken.xsd',
