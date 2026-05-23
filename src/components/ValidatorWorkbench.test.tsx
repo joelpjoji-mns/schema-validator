@@ -97,6 +97,39 @@ describe('ValidatorWorkbench', () => {
     expect(tree.getAllByText('#1').length).toBeGreaterThan(0);
   });
 
+  it('renders recursive XSD summary references without the old expansion warning', async () => {
+    const user = userEvent.setup();
+    render(<ValidatorWorkbench />);
+
+    const [schemaEditor] = screen.getAllByRole('textbox');
+    fireEvent.change(schemaEditor, {
+      target: {
+        value: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Shipment" type="ShipmentType" />
+  <xs:complexType name="ShipmentType">
+    <xs:sequence>
+      <xs:element name="ShipmentID" type="xs:string" />
+      <xs:element name="ChildShipment" type="ShipmentType" minOccurs="0" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+      },
+    });
+
+    await waitFor(() => expect(screen.getByText(/Detected: XSD/i)).toBeInTheDocument());
+    await user.click(screen.getByRole('tab', { name: /summary/i }));
+
+    const tree = within(screen.getByRole('tree'));
+    expect(tree.getByText('ShipmentID')).toBeInTheDocument();
+    expect(tree.getByText('ChildShipment')).toBeInTheDocument();
+    expect(tree.getByText('recursive ref')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Warnings'));
+    expect(screen.getByText('Recursive reference to ShipmentType.')).toBeInTheDocument();
+    expect(screen.queryByText(/Recursive XSD type ShipmentType was not expanded again/i)).not.toBeInTheDocument();
+  });
+
   it('reruns validation after message edits', async () => {
     render(<ValidatorWorkbench />);
 
@@ -215,7 +248,9 @@ describe('ValidatorWorkbench', () => {
 
     await waitFor(() => expect(screen.getByRole('heading', { name: /validation passed/i })).toBeInTheDocument());
     expect(screen.queryByText(/Unsupported nested XSD particle/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /add missing include source header-types\.xsd/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /add missing include source header-types\.xsd/i }),
+    ).not.toBeInTheDocument();
     expect(mockedValidateRequest).toHaveBeenLastCalledWith(
       expect.objectContaining({
         relatedSchemas: [expect.objectContaining({ schemaLocation: 'header-types.xsd' })],

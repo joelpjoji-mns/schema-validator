@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { introspectSchema } from './index';
+import { introspectSchema, type SchemaSummaryNode } from './index';
 
 describe('introspectSchema', () => {
   it('summarizes JSON Schema fields, required flags, and limits', () => {
@@ -60,6 +60,119 @@ describe('introspectSchema', () => {
     expect(summary.root?.children.find((child) => child.name === 'Payload')?.required).toBe(false);
   });
 
+  it('renders direct recursive XSD types as finite summary references', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Shipment" type="ShipmentType" />
+  <xs:complexType name="ShipmentType">
+    <xs:sequence>
+      <xs:element name="ShipmentID" type="xs:string" />
+      <xs:element name="ChildShipment" type="ShipmentType" minOccurs="0" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+    });
+
+    const childShipment = findSummaryNode(summary.root, 'ChildShipment');
+
+    expect(summary.ok).toBe(true);
+    expect(summary.warnings).not.toContain('Recursive XSD type ShipmentType was not expanded again.');
+    expect(summary.root?.children.map((child) => child.name)).toEqual(['ShipmentID', 'ChildShipment']);
+    expect(childShipment?.required).toBe(false);
+    expect(childShipment?.dataType).toBe('ShipmentType');
+    expect(childShipment?.children).toEqual([]);
+    expect(childShipment?.constraints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'recursive', value: 'ShipmentType' }),
+        expect.objectContaining({ kind: 'cycle', value: 'ShipmentType -> ShipmentType' }),
+      ]),
+    );
+    expect(childShipment?.warnings).toEqual(['Recursive reference to ShipmentType.']);
+  });
+
+  it('renders indirect XSD recursive cycles at the cycle point', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Shipment" type="ShipmentType" />
+  <xs:complexType name="ShipmentType">
+    <xs:sequence>
+      <xs:element name="Package" type="PackageType" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="PackageType">
+    <xs:sequence>
+      <xs:element name="PackageID" type="xs:string" />
+      <xs:element name="Shipment" type="ShipmentType" minOccurs="0" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+    });
+
+    const packageNode = findSummaryNode(summary.root, 'Package');
+    const recursiveShipment = packageNode?.children.find((child) => child.name === 'Shipment');
+
+    expect(summary.ok).toBe(true);
+    expect(summary.warnings.join('\n')).not.toContain('was not expanded again');
+    expect(packageNode?.children.map((child) => child.name)).toEqual(['PackageID', 'Shipment']);
+    expect(recursiveShipment?.constraints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'recursive', value: 'ShipmentType' }),
+        expect.objectContaining({ kind: 'cycle', value: 'ShipmentType -> PackageType -> ShipmentType' }),
+      ]),
+    );
+  });
+
+  it('expands the same XSD type in sibling branches when it is not recursive', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Shipment" type="ShipmentType" />
+  <xs:complexType name="ShipmentType">
+    <xs:sequence>
+      <xs:element name="Origin" type="AddressType" />
+      <xs:element name="Destination" type="AddressType" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="AddressType">
+    <xs:sequence>
+      <xs:element name="Street" type="xs:string" />
+      <xs:element name="City" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+    });
+
+    const origin = findSummaryNode(summary.root, 'Origin');
+    const destination = findSummaryNode(summary.root, 'Destination');
+
+    expect(origin?.children.map((child) => child.name)).toEqual(['Street', 'City']);
+    expect(destination?.children.map((child) => child.name)).toEqual(['Street', 'City']);
+    expect(findSummaryNodes(summary.root, 'Street')).toHaveLength(2);
+  });
+
+  it('resolves namespace-prefixed custom XSD type names in the summary', () => {
+    const summary = introspectSchema({
+      schemaFormat: 'xsd',
+      schemaText: `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="https://example.test/shipment" targetNamespace="https://example.test/shipment">
+  <xs:element name="Shipment" type="tns:ShipmentType" />
+  <xs:complexType name="ShipmentType">
+    <xs:sequence>
+      <xs:element name="ShipmentID" type="xs:string" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+    });
+
+    expect(summary.root?.dataType).toBe('ShipmentType');
+    expect(summary.root?.children.map((child) => child.name)).toEqual(['ShipmentID']);
+  });
+
   it('summarizes GraphQL SDL', () => {
     const summary = introspectSchema({
       schemaFormat: 'graphql',
@@ -113,3 +226,16 @@ describe('introspectSchema', () => {
     expect(keyValue.root?.children[0].name).toBe('PORT');
   });
 });
+
+const findSummaryNode = (node: SchemaSummaryNode | undefined, name: string): SchemaSummaryNode | undefined =>
+  findSummaryNodes(node, name)[0];
+
+const findSummaryNodes = (node: SchemaSummaryNode | undefined, name: string): SchemaSummaryNode[] => {
+  if (!node) {
+    return [];
+  }
+
+  return [node, ...node.children.flatMap((child) => findSummaryNodes(child, name))].filter(
+    (current) => current.name === name,
+  );
+};

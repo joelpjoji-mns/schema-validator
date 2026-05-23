@@ -168,7 +168,11 @@ function SummaryNodeRow({
   const collapsed = collapsedIds.has(node.id);
   const hasChildren = visibleChildren.length > 0;
   const connectorClass = depth === 0 ? 'is-root' : isLast ? 'is-last' : 'is-branch';
-  const limitConstraints = node.constraints.filter((item) => !['ref', 'default', 'deprecated'].includes(item.kind));
+  const recursiveConstraint = node.constraints.find((item) => item.kind === 'recursive');
+  const cycleConstraint = node.constraints.find((item) => item.kind === 'cycle');
+  const limitConstraints = node.constraints.filter(
+    (item) => !['ref', 'default', 'deprecated', 'recursive', 'cycle'].includes(item.kind),
+  );
 
   if (!shouldShowNode(node, options) && depth > 0) {
     return null;
@@ -194,7 +198,11 @@ function SummaryNodeRow({
   };
 
   return (
-    <div role="treeitem" aria-expanded={hasChildren ? !collapsed : undefined} style={{ '--tree-depth': depth } as CSSProperties}>
+    <div
+      role="treeitem"
+      aria-expanded={hasChildren ? !collapsed : undefined}
+      style={{ '--tree-depth': depth } as CSSProperties}
+    >
       <button
         type="button"
         className={`schema-tree-row kind-${node.kind} ${hasChildren || node.sourceRange ? 'is-interactive' : ''}`}
@@ -213,6 +221,11 @@ function SummaryNodeRow({
         <span className={`tree-badge ${node.required ? 'is-required' : 'is-optional'}`}>
           {node.required ? 'mandatory' : 'optional'}
         </span>
+        {recursiveConstraint ? (
+          <span className="tree-badge is-recursive" title={cycleConstraint?.value}>
+            recursive ref
+          </span>
+        ) : null}
         {options.showLimits
           ? limitConstraints.slice(0, 4).map((item) => (
               <span key={`${node.id}-${item.kind}-${item.value}`} className="tree-badge is-limit">

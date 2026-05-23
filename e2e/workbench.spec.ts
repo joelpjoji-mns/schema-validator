@@ -47,7 +47,12 @@ test('starts empty, detects XSD, and shows the schema summary tree', async ({ pa
   await expect(page.getByLabel('Order')).not.toBeChecked();
   await expect(page.getByRole('tree').getByText(/xs:string/)).toHaveCount(0);
   await page.getByLabel('Types').check();
-  await expect(page.getByRole('tree').getByText(/xs:string/).first()).toBeVisible();
+  await expect(
+    page
+      .getByRole('tree')
+      .getByText(/xs:string/)
+      .first(),
+  ).toBeVisible();
 });
 
 test('reruns validation after the message changes', async ({ page }) => {
@@ -69,6 +74,33 @@ test('reruns validation after the message changes', async ({ page }) => {
   await setEditorText(page, 'Message', '{}');
 
   await expect(page.getByText(/Missing required field: name/i)).toBeVisible();
+});
+
+test('shows recursive XSD summary references without expansion warnings', async ({ page }) => {
+  await page.goto('/');
+  await setEditorText(
+    page,
+    'Schema',
+    `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Shipment" type="ShipmentType" />
+  <xs:complexType name="ShipmentType">
+    <xs:sequence>
+      <xs:element name="ShipmentID" type="xs:string" />
+      <xs:element name="ChildShipment" type="ShipmentType" minOccurs="0" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+  );
+
+  await expect(page.getByText(/Detected: XSD/i)).toBeVisible();
+  await page.getByRole('tab', { name: /summary/i }).click();
+  await expect(page.getByRole('tree').getByText('ShipmentID')).toBeVisible();
+  await expect(page.getByRole('tree').getByText('ChildShipment')).toBeVisible();
+  await expect(page.getByText('recursive ref')).toBeVisible();
+
+  await page.getByLabel('Warnings').click();
+  await expect(page.getByText('Recursive reference to ShipmentType.')).toBeVisible();
+  await expect(page.getByText(/Recursive XSD type ShipmentType was not expanded again/i)).toHaveCount(0);
 });
 
 test('resolves an XSD include from the Sources tab', async ({ page }) => {

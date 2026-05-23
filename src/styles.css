@@ -847,6 +847,11 @@ select {
   background: #fef3c7;
 }
 
+.tree-badge.is-recursive {
+  color: #1f2937;
+  background: #e0f2fe;
+}
+
 .tree-description {
   max-width: 760px;
   margin: 2px 0 7px calc(48px + (var(--tree-depth, 0) * 20px));

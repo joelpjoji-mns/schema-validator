@@ -913,7 +913,7 @@ const introspectXsd = (schemaText: string, schemaFormat: SchemaFormat): SchemaSu
     return createSummary(schemaFormat, 'XSD summary', undefined, ['No top-level xs:element was found.']);
   }
 
-  const root = xsdElementNode(rootElement, schemaText, complexTypes, simpleTypes, state, new Set(), 0, true, 1, 'root');
+  const root = xsdElementNode(rootElement, schemaText, complexTypes, simpleTypes, state, [], 0, true, 1, 'root');
   return createSummary(schemaFormat, 'XSD summary', root, state.warnings);
 };
 
@@ -933,7 +933,7 @@ const xsdElementNode = (
   complexTypes: Map<string, string>,
   simpleTypes: Map<string, string>,
   state: BuildState,
-  visitedTypes: Set<string>,
+  activeTypePath: string[],
   depth: number,
   required: boolean,
   order: number,
@@ -953,10 +953,43 @@ const xsdElementNode = (
   ];
   const sourceRange = rangeFromOffset(schemaText, element.start, element.length);
   const typeBlock = element.block.includes(':complexType') ? element.block : complexTypes.get(typeName);
+  const container = typeBlock?.includes(':choice')
+    ? 'choice'
+    : typeBlock?.includes(':all')
+      ? 'all'
+      : typeBlock?.includes(':sequence')
+        ? 'sequence'
+        : undefined;
+  if (container) {
+    constraints.push(constraint('container', container));
+  }
+
+  const namedComplexType = element.type && complexTypes.has(typeName) ? typeName : undefined;
+  const cycleStart = namedComplexType ? activeTypePath.indexOf(namedComplexType) : -1;
+  if (typeBlock && namedComplexType && cycleStart >= 0) {
+    const cyclePath = [...activeTypePath.slice(cycleStart), namedComplexType].join(' -> ');
+    return node({
+      id: `xsd-${element.name}-${element.start}-recursive`,
+      name: element.name,
+      kind,
+      dataType: typeName,
+      required,
+      order,
+      constraints: [
+        ...constraints,
+        constraint('recursive', 'recursive ref', typeName),
+        constraint('cycle', 'cycle', cyclePath),
+      ],
+      children: [],
+      sourceRange,
+      warnings: [`Recursive reference to ${typeName}.`],
+    });
+  }
+
   const children: SchemaSummaryNode[] = [];
 
-  if (typeBlock && !visitedTypes.has(typeName)) {
-    const nextVisited = new Set(visitedTypes).add(typeName);
+  if (typeBlock) {
+    const nextActiveTypePath = namedComplexType ? [...activeTypePath, namedComplexType] : activeTypePath;
     xsdChildElements(typeBlock, element.start).forEach((child, index) => {
       children.push(
         xsdElementNode(
@@ -965,7 +998,7 @@ const xsdElementNode = (
           complexTypes,
           simpleTypes,
           state,
-          nextVisited,
+          nextActiveTypePath,
           depth + 1,
           parseOccurs(child.minOccurs, 1) > 0,
           index + 1,
@@ -989,19 +1022,6 @@ const xsdElementNode = (
         }),
       );
     });
-  } else if (typeBlock && visitedTypes.has(typeName)) {
-    state.warnings.push(`Recursive XSD type ${typeName} was not expanded again.`);
-  }
-
-  const container = typeBlock?.includes(':choice')
-    ? 'choice'
-    : typeBlock?.includes(':all')
-      ? 'all'
-      : typeBlock?.includes(':sequence')
-        ? 'sequence'
-        : undefined;
-  if (container) {
-    constraints.push(constraint('container', container));
   }
 
   return node({
@@ -1134,7 +1154,10 @@ const xmlAttribute = (source: string, name: string) =>
   new RegExp(`${escapeRegExp(name)}\\s*=\\s*["']([^"']*)["']`, 'i').exec(source)?.[1];
 
 const inlineTypeName = (name: string) => `${name}Type`;
-const normalizeXsdType = (type: string) => type.replace(/^xsd:/, 'xs:');
+const normalizeXsdType = (type: string) => {
+  const normalized = type.replace(/^xsd:/, 'xs:');
+  return normalized.startsWith('xs:') ? normalized : normalized.replace(/^[A-Za-z_][\w.-]*:/, '');
+};
 const parseOccurs = (value: string | undefined, fallback: number) => {
   if (value === undefined || value === 'unbounded') {
     return value === 'unbounded' ? Number.POSITIVE_INFINITY : fallback;
